@@ -1,3 +1,5 @@
+中文 | **[English](README.md)**
+
 # OpenHub
 
 > 基于 [opencode](https://opencode.ai) 构建的企业级多用户 Web 平台，支持用户管理、模型权限控制、独立工作空间和模块化技能包。
@@ -145,6 +147,30 @@ npm run dev
 | opencode serve | http://localhost:4096 |
 
 默认管理员账号：`admin` / `admin`
+
+---
+
+## 界面截图
+
+### 💬 对话界面
+流畅的聊天体验，支持实时 AI 响应、多模态输入和直观的对话历史管理。
+
+![对话界面](pic/conversation.png)
+
+### 👥 用户管理
+全面的用户管理面板，支持创建、编辑和管理用户账号，具备基于角色的访问控制。
+
+![用户管理](pic/usermanage.png)
+
+### 🤖 模型配置
+灵活的 AI 模型管理，支持服务商集成、API 密钥配置和默认模型设置。
+
+![模型配置](pic/modelsetting.png)
+
+### ⚙️ 服务设置
+Opencode 服务控制面板，用于管理 AI 代理运行时，包括自动启动配置和服务监控。
+
+![服务设置](pic/opencodesetting.png)
 
 ---
 

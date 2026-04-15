@@ -181,7 +181,7 @@ const AssistantMessage = ({ message, filterContent, messageTimings, handleQuesti
                       padding: '2px 8px'
                     }}
                   >
-                    由 opencode 大模型生成
+                    由 OpenHub 大模型生成
                   </Tag>
                 )}
               </div>

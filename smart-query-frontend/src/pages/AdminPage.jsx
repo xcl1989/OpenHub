@@ -1016,7 +1016,7 @@ const AdminPage = () => {
           borderBottom: '1px solid #f0f0f0',
         }}>
           <Title level={5} style={{ margin: 0, color: '#1890ff' }}>
-            Opencode Agent
+            OpenHub
           </Title>
           <Text type="secondary" style={{ fontSize: 11 }}>管理后台</Text>
         </div>

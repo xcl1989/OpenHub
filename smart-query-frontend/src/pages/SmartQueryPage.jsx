@@ -1477,7 +1477,7 @@ const SmartQueryPage = () => {
               color: '#1f2937'
             }}
           >
-            Opencode Agent 平台
+            OpenHub 平台
           </Title>
           {conversationId && (
             <Tag

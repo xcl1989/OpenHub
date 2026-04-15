@@ -58,7 +58,7 @@ const LoginPage = () => {
               color: '#1f2937',
               fontSize: 'clamp(20px, 5vw, 24px)'
             }}>
-              Opencode Agent 平台
+              OpenHub 平台
             </Title>
             <Typography.Text type="secondary" style={{ 
               color: '#6b7280',

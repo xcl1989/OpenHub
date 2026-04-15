@@ -1,3 +1,5 @@
+**[中文](README_CN.md)** | English
+
 # OpenHub
 
 > An enterprise-grade multi-user web platform built on [opencode](https://opencode.ai), featuring user management, model access control, per-user workspaces, and a rich ecosystem of modular skills.
@@ -147,6 +149,30 @@ npm run dev
 | opencode serve | http://localhost:4096 |
 
 Default admin credentials: `admin` / `admin`
+
+---
+
+## Screenshots
+
+### 💬 Chat Interface
+Streamlined chat experience with real-time AI responses, multi-modal input support, and intuitive conversation history.
+
+![Chat Interface](pic/conversation.png)
+
+### 👥 User Management
+Comprehensive user administration panel for creating, editing, and managing user accounts with role-based access control.
+
+![User Management](pic/usermanage.png)
+
+### 🤖 Model Configuration
+Flexible AI model management with provider integration, API key configuration, and default model settings.
+
+![Model Settings](pic/modelsetting.png)
+
+### ⚙️ Service Settings
+Opencode service control panel for managing the AI agent runtime, including auto-start configuration and service monitoring.
+
+![Opencode Settings](pic/opencodesetting.png)
 
 ---
 
