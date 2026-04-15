@@ -1,6 +1,7 @@
 """数据库连接模块"""
 
 import pymysql
+import json
 from typing import Optional
 from datetime import date as date_type
 from contextlib import contextmanager
@@ -800,7 +801,7 @@ def set_system_config(key: str, value: str) -> bool:
 
 def get_user_workspace(user_id: int) -> Optional[str]:
     """
-    获取用户工作空间路径
+    获取用户工作空间路径（优先从 Redis 缓存读取）
 
     Args:
         user_id: 用户 ID
@@ -809,13 +810,24 @@ def get_user_workspace(user_id: int) -> Optional[str]:
         工作空间路径，不存在返回 None
     """
     try:
+        from app.core.auth import get_redis_client
+
+        redis_client = get_redis_client()
+        cache_key = f"user:{user_id}:workspace"
+        cached = redis_client.get(cache_key)
+        if cached is not None:
+            return cached if cached != "__NONE__" else None
+
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT workspace_path FROM users WHERE id = %s", (user_id,)
                 )
                 row = cursor.fetchone()
-                return row["workspace_path"] if row else None
+                workspace = row["workspace_path"] if row else None
+
+        redis_client.set(cache_key, workspace or "__NONE__", ex=3600)
+        return workspace
     except Exception as e:
         print(f"获取用户工作空间失败：{e}")
         return None
@@ -823,7 +835,7 @@ def get_user_workspace(user_id: int) -> Optional[str]:
 
 def update_user_workspace(user_id: int, workspace_path: str) -> bool:
     """
-    更新用户工作空间路径
+    更新用户工作空间路径（同步更新 Redis 缓存）
 
     Args:
         user_id: 用户 ID
@@ -839,7 +851,13 @@ def update_user_workspace(user_id: int, workspace_path: str) -> bool:
                     "UPDATE users SET workspace_path = %s WHERE id = %s",
                     (workspace_path, user_id),
                 )
-                return True
+        from app.core.auth import get_redis_client
+
+        redis_client = get_redis_client()
+        redis_client.set(
+            f"user:{user_id}:workspace", workspace_path or "__NONE__", ex=3600
+        )
+        return True
     except Exception as e:
         print(f"更新用户工作空间失败：{e}")
         return False
