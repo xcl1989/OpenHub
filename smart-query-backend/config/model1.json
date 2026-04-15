@@ -1,0 +1,7 @@
+{
+  "model": {
+    "modelID": "qwen3.5-plus",
+    "providerID": "bailian-coding-plan-test"
+  },
+  "description": "阿里云百炼 Qwen3.5 Plus 模型"
+}

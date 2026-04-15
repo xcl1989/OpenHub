@@ -1,0 +1,66 @@
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.table-with-chart-container {
+  position: relative;
+}
+
+.table-with-chart-container:hover .chart-toolbar {
+  opacity: 1;
+  visibility: visible;
+}
+
+.chart-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 4px 8px;
+  border-radius: 6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 1px solid #e5e7eb;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.chart-content {
+  padding: 16px;
+  background: #fff;
+  border-radius: 8;
+  border: 1px solid #e5e7eb;
+}
+
+.chart-content-animated {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* 导出 PDF 按钮响应式 */
+@media (max-width: 768px) {
+  .export-doc-button {
+    padding: 0 12px !important;
+    height: 36px !important;
+    font-size: 12px !important;
+    bottom: 70px !important;
+    right: 16px !important;
+  }
+  
+  .export-doc-button .anticon {
+    font-size: 14px !important;
+  }
+  
+  .export-doc-button span:not(.anticon) {
+    display: none !important;
+  }
+}
