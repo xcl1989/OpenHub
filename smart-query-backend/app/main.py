@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 """
-FastAPI 后端服务 - Opencode Agent 平台
+FastAPI 后端服务 - OpenHub 平台
 """
 
 from pathlib import Path
 from contextlib import asynccontextmanager
-
-dotenv_path = Path(__file__).parent.parent / ".env"
-if dotenv_path.exists():
-    from dotenv import load_dotenv
-
-    load_dotenv(dotenv_path)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

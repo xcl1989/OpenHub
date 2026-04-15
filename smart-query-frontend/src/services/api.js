@@ -93,104 +93,155 @@ export const queryDataService = {
     return response.data;
   },
 
-  queryDataStream: async (question, conversationId = '', onChunk, onEnd, onError, images = null, agent = 'build', model = null) => {
-    try {
-      const token = getAuthToken();
-      const requestBody = {
-        question,
-        conversation_id: conversationId,
-        agent,
-      };
+  queryDataStream: async (question, conversationId = '', onChunk, onEnd, onError, images = null, agent = 'build', model = null, signal = null) => {
+    const MAX_RETRIES = 2;
 
-      if (model) {
-        requestBody.model = model;
-      }
-      
-      if (images && images.length > 0) {
-        requestBody.images = images.map(img => ({
-          base64: img.base64,
-          filename: img.name
-        }));
-      }
-      
-      const response = await fetch(`${API_BASE_URL}/query/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(requestBody),
-      });
+    const doStream = async (retryCount = 0) => {
+      try {
+        const token = getAuthToken();
+        const requestBody = {
+          question,
+          conversation_id: conversationId,
+          agent,
+        };
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          clearAuthToken();
-          window.location.href = '/login';
-          return;
+        if (model) {
+          requestBody.model = model;
         }
-        if (response.status === 403) {
-          try {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || '模型调用次数已达上限，请更换模型或联系管理员');
-          } catch (e) {
-            throw new Error('模型调用次数已达上限，请更换模型或联系管理员');
+
+        if (images && images.length > 0) {
+          requestBody.images = images.map(img => ({
+            base64: img.base64,
+            filename: img.name
+          }));
+        }
+
+        const response = await fetch(`${API_BASE_URL}/query/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify(requestBody),
+          signal,
+        });
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            clearAuthToken();
+            window.location.href = '/login';
+            return;
           }
-        }
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let sessionId = null;
-      let hasError = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
+          if (response.status === 403) {
             try {
-              const data = JSON.parse(line.slice(6));
-              
-              if (data.payload && data.payload.type) {
-                const payloadData = {
-                  type: data.payload.type,
-                  ...data.payload.properties
-                };
-                onChunk?.(payloadData);
-              } else {
-                if (data.type === 'session' && data.conversation_id) {
-                  sessionId = data.conversation_id;
-                }
-                if (data.type === 'error') {
-                  hasError = true;
-                  onError?.(new Error(data.error));
-                }
-                onChunk?.(data);
-              }
-              
-              if (data.done && data.type === 'error') {
-                break;
-              }
+              const errorData = await response.json();
+              throw new Error(errorData.detail || '模型调用次数已达上限，请更换模型或联系管理员');
             } catch (e) {
-              console.warn('Failed to parse SSE data:', e, line);
+              throw new Error('模型调用次数已达上限，请更换模型或联系管理员');
+            }
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let sessionId = null;
+        let hasError = false;
+        let lastEventType = null;
+
+        while (true) {
+          if (signal?.aborted) break;
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (data.payload && data.payload.type) {
+                  const payloadData = {
+                    type: data.payload.type,
+                    ...data.payload.properties
+                  };
+                  lastEventType = data.payload.type;
+                  onChunk?.(payloadData);
+                } else {
+                  if (data.type === 'session' && data.conversation_id) {
+                    sessionId = data.conversation_id;
+                  }
+                  if (data.type === 'error') {
+                    hasError = true;
+                    onError?.(new Error(data.error));
+                  }
+                  lastEventType = data.type;
+                  onChunk?.(data);
+                }
+
+                if (data.done && data.type === 'error') {
+                  break;
+                }
+              } catch (e) {
+                console.warn('Failed to parse SSE data:', e, line);
+              }
             }
           }
         }
-      }
-      
-      if (!hasError) {
+
+        if (signal?.aborted) {
+          onEnd?.(sessionId || conversationId);
+          return;
+        }
+
+        if (buffer.trim()) {
+          const remainingLines = buffer.split('\n');
+          for (const line of remainingLines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.payload && data.payload.type) {
+                  lastEventType = data.payload.type;
+                  onChunk?.({ type: data.payload.type, ...data.payload.properties });
+                } else {
+                  if (data.type === 'session' && data.conversation_id) sessionId = data.conversation_id;
+                  if (data.type === 'error') { hasError = true; onError?.(new Error(data.error)); }
+                  lastEventType = data.type;
+                  onChunk?.(data);
+                }
+              } catch (e) {
+                console.warn('Failed to parse SSE data:', e, line);
+              }
+            }
+          }
+        }
+
+        if (hasError) return;
+
+        if (lastEventType !== 'complete' && retryCount < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, 2000));
+          if (signal?.aborted) {
+            onEnd?.(sessionId || conversationId);
+            return;
+          }
+          return doStream(retryCount + 1);
+        }
+
         onEnd?.(sessionId || conversationId);
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          onEnd?.(conversationId);
+          return;
+        }
+        onError?.(error);
       }
-    } catch (error) {
-      onError?.(error);
-    }
+    };
+
+    return doStream(0);
   },
 
   getSessions: async (page = 1, pageSize = 10) => {
@@ -213,7 +264,7 @@ export const queryDataService = {
     return response.data;
   },
 
-  reconnectStream: async (sessionId, onChunk, onEnd, onError) => {
+  reconnectStream: async (sessionId, onChunk, onEnd, onError, signal = null) => {
     try {
       const token = getAuthToken();
       const response = await fetch(`${API_BASE_URL}/query/stream/reconnect?session_id=${sessionId}`, {
@@ -222,6 +273,7 @@ export const queryDataService = {
           'Authorization': `Bearer ${token}`,
           'Accept': 'text/event-stream',
         },
+        signal,
       });
 
       if (!response.ok) {
@@ -245,6 +297,7 @@ export const queryDataService = {
       let hasError = false;
 
       while (true) {
+        if (signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -268,10 +321,29 @@ export const queryDataService = {
         }
       }
 
+      if (buffer.trim()) {
+        const remainingLines = buffer.split('\n');
+        for (const line of remainingLines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === 'error') { hasError = true; onError?.(new Error(data.error)); }
+              onChunk?.(data);
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', e, line);
+            }
+          }
+        }
+      }
+
       if (!hasError) {
         onEnd?.(sessionId);
       }
     } catch (error) {
+      if (error.name === 'AbortError') {
+        onEnd?.(sessionId);
+        return;
+      }
       onError?.(error);
     }
   },

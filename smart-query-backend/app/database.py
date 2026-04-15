@@ -16,13 +16,31 @@ DB_CONFIG = {
     "cursorclass": pymysql.cursors.DictCursor,
 }
 
+_db_pool = None
+
+
+def _get_pool():
+    global _db_pool
+    if _db_pool is None:
+        from dbutils.pooled_db import PooledDB
+
+        _db_pool = PooledDB(
+            creator=pymysql,
+            maxconnections=20,
+            mincached=2,
+            maxcached=10,
+            blocking=True,
+            **DB_CONFIG,
+        )
+    return _db_pool
+
 
 @contextmanager
 def get_db_connection():
-    """获取数据库连接的上下文管理器"""
+    """获取数据库连接的上下文管理器（连接池）"""
     conn = None
     try:
-        conn = pymysql.connect(**DB_CONFIG)
+        conn = _get_pool().connection()
         yield conn
         conn.commit()
     except Exception as e:
@@ -130,6 +148,21 @@ def save_message(
     except Exception as e:
         print(f"保存消息失败：{e}")
         return {"message_id": None, "image_ids": []}
+
+
+def get_session_owner(session_id: str) -> Optional[int]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT user_id FROM conversation_sessions WHERE session_id = %s",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                return row["user_id"] if row else None
+    except Exception as e:
+        print(f"获取会话所有者失败：{e}")
+        return None
 
 
 def get_sessions(

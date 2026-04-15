@@ -1,10 +1,33 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Spin } from 'antd';
 import SmartQueryPage from './pages/SmartQueryPage';
 import LoginPage from './pages/LoginPage';
 import AdminPage from './pages/AdminPage';
 import { getAuthToken, authService } from './services/api';
+
+let _cachedUser = null;
+let _cacheExpiry = 0;
+
+async function getCachedUser() {
+  const now = Date.now();
+  if (_cachedUser && now < _cacheExpiry) return _cachedUser;
+  try {
+    const result = await authService.getMe();
+    _cachedUser = result;
+    _cacheExpiry = now + 5 * 60 * 1000;
+    return _cachedUser;
+  } catch {
+    _cachedUser = null;
+    _cacheExpiry = 0;
+    return null;
+  }
+}
+
+export function clearAuthCache() {
+  _cachedUser = null;
+  _cacheExpiry = 0;
+}
 
 const AuthGuard = ({ children }) => {
   const location = useLocation();
@@ -20,14 +43,9 @@ const AuthGuard = ({ children }) => {
         return;
       }
 
-      try {
-        await authService.getMe();
-        setAuthenticated(true);
-      } catch (error) {
-        setAuthenticated(false);
-      } finally {
-        setChecking(false);
-      }
+      const user = await getCachedUser();
+      setAuthenticated(!!user);
+      setChecking(false);
     };
 
     checkAuth();
@@ -37,6 +55,7 @@ const AuthGuard = ({ children }) => {
       if (!token) {
         setAuthenticated(false);
         setChecking(false);
+        clearAuthCache();
       }
     };
     
@@ -70,14 +89,9 @@ const AdminGuard = ({ children }) => {
 
   useEffect(() => {
     const checkAdmin = async () => {
-      try {
-        const result = await authService.getMe();
-        setIsAdmin(result.data?.is_admin || false);
-      } catch {
-        setIsAdmin(false);
-      } finally {
-        setChecking(false);
-      }
+      const user = await getCachedUser();
+      setIsAdmin(user?.data?.is_admin || false);
+      setChecking(false);
     };
     checkAdmin();
   }, []);

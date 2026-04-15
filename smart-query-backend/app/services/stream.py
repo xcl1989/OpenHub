@@ -1,3 +1,5 @@
+import logging
+import shutil
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -10,10 +12,30 @@ from app import database
 from app.services.opencode_client import opencode_client
 from app.models.query import ImageData
 
+logger = logging.getLogger(__name__)
+
 _FALLBACK_DEFAULT = {"modelID": "MiniMax-M2.7", "providerID": "minimax"}
 _default_model_cache: Optional[dict] = None
 _cache_timestamp: float = 0
 _CACHE_TTL: float = 30.0
+
+
+def _write_log(log_file: Path, content: str):
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(content)
+
+
+def cleanup_old_logs(max_age_days: int = 7):
+    logs_base = Path(__file__).parent.parent / "logs"
+    if not logs_base.exists():
+        return
+    cutoff = datetime.now().timestamp() - max_age_days * 86400
+    for entry in logs_base.iterdir():
+        if entry.is_dir() and entry.stat().st_mtime < cutoff:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+cleanup_old_logs()
 
 
 async def get_default_model() -> dict:
@@ -107,7 +129,7 @@ async def stream_generator(
                 break
             yield event
     except Exception:
-        pass
+        logger.exception("Error in stream_generator for session %s", session_id)
 
 
 async def reconnect_stream(session_id: str):
@@ -129,7 +151,7 @@ async def reconnect_stream(session_id: str):
                 break
             yield event
     except Exception:
-        pass
+        logger.exception("Error in reconnect_stream for session %s", session_id)
 
 
 async def _background_collector(
@@ -170,19 +192,28 @@ async def _background_collector(
     model_config = model or (await get_default_model())
     model_str = json.dumps(model_config)
 
-    database.save_message(
-        session_id, "user", question, metadata, agent=agent, model=model_str
+    await asyncio.to_thread(
+        database.save_message,
+        session_id,
+        "user",
+        question,
+        metadata,
+        agent,
+        model_str,
     )
 
     title = question[:50] + "..." if len(question) > 50 else question
-    database.save_session(session_id, title, user_id=user_id)
+    await asyncio.to_thread(database.save_session, session_id, title, user_id)
 
     try:
         client = await opencode_client.get_client_for_stream()
 
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[INFO] Background collector started for session {session_id}\n")
-            f.write(f"[INFO] Received images: {len(images) if images else 0}\n")
+        await asyncio.to_thread(
+            _write_log,
+            log_file,
+            f"[INFO] Background collector started for session {session_id}\n"
+            f"[INFO] Received images: {len(images) if images else 0}\n",
+        )
 
         async with client.stream(
             "GET",
@@ -193,8 +224,7 @@ async def _background_collector(
         ) as event_response:
             if event_response.status_code != 200:
                 error_msg = f"监听失败：{event_response.status_code}"
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"[ERROR] {error_msg}\n")
+                await asyncio.to_thread(_write_log, log_file, f"[ERROR] {error_msg}\n")
                 await queue.put(
                     f"data: {json.dumps({'error': error_msg, 'type': 'error'})}\n\n"
                 )
@@ -237,8 +267,7 @@ async def _background_collector(
 
             if prompt_response.status_code not in [200, 204]:
                 error_msg = f"提交失败：{prompt_response.status_code}"
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"[ERROR] {error_msg}\n")
+                await asyncio.to_thread(_write_log, log_file, f"[ERROR] {error_msg}\n")
                 await queue.put(
                     f"data: {json.dumps({'error': error_msg, 'type': 'error'})}\n\n"
                 )
@@ -253,31 +282,35 @@ async def _background_collector(
             last_message_id = ""
             pushed_message_starts: set[str] = set()
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[INFO] Session: {session_id}\n")
-                f.write(f"[INFO] Question: {question}\n")
-                f.write(
-                    f"[INFO] Start listening events at {datetime.now().isoformat()}\n"
-                )
-                f.write("-" * 80 + "\n")
-                f.write(
-                    f"[SEND] -> queue: {{'type': 'session', 'conversation_id': '{session_id}'}}\n"
-                )
+            await asyncio.to_thread(
+                _write_log,
+                log_file,
+                f"[INFO] Session: {session_id}\n"
+                f"[INFO] Question: {question}\n"
+                f"[INFO] Start listening events at {datetime.now().isoformat()}\n"
+                f"{'-' * 80}\n"
+                f"[SEND] -> queue: {{'type': 'session', 'conversation_id': '{session_id}'}}\n",
+            )
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[INFO] Starting to collect and process events...\n")
+            await asyncio.to_thread(
+                _write_log,
+                log_file,
+                "[INFO] Starting to collect and process events...\n",
+            )
 
             async for line in event_response.aiter_lines():
                 if abort_event.is_set():
-                    with open(log_file, "a", encoding="utf-8") as f:
-                        f.write(f"[INFO] Abort signal received, stopping...\n")
+                    await asyncio.to_thread(
+                        _write_log,
+                        log_file,
+                        "[INFO] Abort signal received, stopping...\n",
+                    )
                     await queue.put(
                         f"data: {json.dumps({'type': 'aborted', 'done': True})}\n\n"
                     )
                     break
 
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"{line}\n")
+                await asyncio.to_thread(_write_log, log_file, f"{line}\n")
 
                 if not line.startswith("data: "):
                     continue
@@ -297,8 +330,9 @@ async def _background_collector(
                         continue
 
                 except json.JSONDecodeError as e:
-                    with open(log_file, "a", encoding="utf-8") as f:
-                        f.write(f"[ERROR] JSON decode error: {e}\n")
+                    await asyncio.to_thread(
+                        _write_log, log_file, f"[ERROR] JSON decode error: {e}\n"
+                    )
                     continue
 
                 if event_type == "message.updated":
@@ -312,7 +346,7 @@ async def _background_collector(
                                 f"data: {json.dumps({'type': 'message_complete', 'message_id': last_message_id, 'done': True})}\n\n"
                             )
 
-                            _save_message_to_db(
+                            await _save_message_to_db(
                                 session_id,
                                 last_message_id,
                                 message_contents,
@@ -331,10 +365,11 @@ async def _background_collector(
                         message_tools[message_id] = {}
                         message_reasoning[message_id] = ""
 
-                        with open(log_file, "a", encoding="utf-8") as f:
-                            f.write(
-                                f"[INFO] New assistant message: {message_id} (#{message_count})\n"
-                            )
+                        await asyncio.to_thread(
+                            _write_log,
+                            log_file,
+                            f"[INFO] New assistant message: {message_id} (#{message_count})\n",
+                        )
 
                         if message_count > 1:
                             await queue.put(
@@ -380,13 +415,13 @@ async def _background_collector(
                 elif event_type == "session.status":
                     status = properties.get("status", {})
                     if status.get("type") == "idle":
-                        with open(log_file, "a", encoding="utf-8") as f:
-                            f.write(
-                                f"[INFO] Session idle at {datetime.now().isoformat()}\n"
-                            )
+                        await asyncio.to_thread(
+                            _write_log,
+                            log_file,
+                            f"[INFO] Session idle at {datetime.now().isoformat()}\n",
+                        )
                         break
 
-                # 将事件推送到 queue 供前端消费
                 try:
                     await _push_event_to_queue(
                         queue,
@@ -395,16 +430,20 @@ async def _background_collector(
                         log_file,
                     )
                 except Exception:
-                    with open(log_file, "a", encoding="utf-8") as f:
-                        f.write(
-                            f"[INFO] Queue push failed (no consumer), continuing...\n"
-                        )
+                    await asyncio.to_thread(
+                        _write_log,
+                        log_file,
+                        "[INFO] Queue push failed (no consumer), continuing...\n",
+                    )
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[INFO] Event collection finished. Saving final message...\n")
+            await asyncio.to_thread(
+                _write_log,
+                log_file,
+                "[INFO] Event collection finished. Saving final message...\n",
+            )
 
             if last_message_id and last_message_id in message_contents:
-                _save_message_to_db(
+                await _save_message_to_db(
                     session_id,
                     last_message_id,
                     message_contents,
@@ -422,14 +461,26 @@ async def _background_collector(
                 f"data: {json.dumps({'type': 'session_idle', 'done': False})}\n\n"
             )
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[INFO] Event stream ended at {datetime.now().isoformat()}\n")
-                f.write(f"[INFO] Total messages: {message_count}\n")
+            await asyncio.to_thread(
+                _write_log,
+                log_file,
+                f"[INFO] Event stream ended at {datetime.now().isoformat()}\n"
+                f"[INFO] Total messages: {message_count}\n",
+            )
 
+    except asyncio.CancelledError:
+        await asyncio.to_thread(
+            _write_log,
+            log_file,
+            f"[WARN] Background collector cancelled for session {session_id}\n",
+        )
+        raise
     except Exception as e:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[ERROR] Exception: {e}\n")
-            f.write(f"[ERROR] Exception type: {type(e).__name__}\n")
+        await asyncio.to_thread(
+            _write_log,
+            log_file,
+            f"[ERROR] Exception: {e}\n[ERROR] Exception type: {type(e).__name__}\n",
+        )
         try:
             await queue.put(
                 f"data: {json.dumps({'error': str(e), 'type': 'error', 'done': True})}\n\n"
@@ -438,7 +489,7 @@ async def _background_collector(
             pass
     finally:
         if last_message_id and last_message_id in message_contents:
-            _save_message_to_db(
+            await _save_message_to_db(
                 session_id,
                 last_message_id,
                 message_contents,
@@ -453,11 +504,14 @@ async def _background_collector(
         processing_sessions.pop(session_id, None)
         _abort_events.pop(session_id, None)
 
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[INFO] Background collector finished for session {session_id}\n")
+        await asyncio.to_thread(
+            _write_log,
+            log_file,
+            f"[INFO] Background collector finished for session {session_id}\n",
+        )
 
 
-def _save_message_to_db(
+async def _save_message_to_db(
     session_id: str,
     message_id: str,
     message_contents: dict[str, str],
@@ -476,17 +530,19 @@ def _save_message_to_db(
     if message_id in message_reasoning and message_reasoning[message_id]:
         msg_metadata["reasoning"] = message_reasoning[message_id]
 
-    database.save_message(
+    await asyncio.to_thread(
+        database.save_message,
         session_id,
         "assistant",
         message_contents[message_id],
         msg_metadata if msg_metadata else None,
-        agent=agent,
-        model=model,
+        agent,
+        model,
     )
 
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"[INFO] Saved message {message_id} to DB\n")
+    await asyncio.to_thread(
+        _write_log, log_file, f"[INFO] Saved message {message_id} to DB\n"
+    )
 
     del message_contents[message_id]
     if message_id in message_tools:
@@ -508,8 +564,7 @@ async def _push_event_to_queue(
 
         if part_type == "step-start":
             msg = {"type": "step-start", "done": False}
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[SEND] -> queue: {msg}\n")
+            await asyncio.to_thread(_write_log, log_file, f"[SEND] -> queue: {msg}\n")
             await queue.put(f"data: {json.dumps(msg)}\n\n")
 
         elif part_type == "reasoning" and text:
@@ -554,8 +609,7 @@ async def _push_event_to_queue(
                 "title": tool_title,
                 "done": False,
             }
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[SEND] -> queue: {msg}\n")
+            await asyncio.to_thread(_write_log, log_file, f"[SEND] -> queue: {msg}\n")
             await queue.put(f"data: {json.dumps(msg)}\n\n")
 
         elif part_type == "step-finish":

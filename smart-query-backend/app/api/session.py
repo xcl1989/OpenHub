@@ -1,5 +1,3 @@
-import base64
-
 from fastapi import APIRouter, HTTPException, Depends
 
 from app.core.auth import get_current_user
@@ -50,12 +48,20 @@ async def get_sessions(
 async def get_messages(session_id: str, current_user: dict = Depends(get_current_user)):
     """获取会话的消息列表（从数据库，最新 100 条）"""
     try:
+        owner = database.get_session_owner(session_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if owner != current_user.get("id"):
+            raise HTTPException(status_code=403, detail="无权访问该会话")
+
         messages = database.get_messages(session_id, limit=100)
         return {
             "success": True,
             "data": messages,
             "is_processing": is_session_processing(session_id),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -92,6 +98,12 @@ async def archive_session(
 ):
     """归档会话（软删除）"""
     try:
+        owner = database.get_session_owner(request.session_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if owner != current_user.get("id"):
+            raise HTTPException(status_code=403, detail="无权操作该会话")
+
         success = database.archive_session(request.session_id)
         if success:
             return {"success": True, "message": "会话已归档"}

@@ -227,9 +227,17 @@ const SmartQueryPage = () => {
     }
   };
 
+  const prevMessageCountRef = useRef(0);
+
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    const count = messages.length;
+    const newUserMsg = count > prevMessageCountRef.current && messages[messages.length - 1]?.type === 'user';
+    prevMessageCountRef.current = count;
+
+    if (loading || newUserMsg) {
+      messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'instant' : 'smooth' });
+    }
+  }, [messages, loading]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -443,6 +451,10 @@ const SmartQueryPage = () => {
         setHistoryDrawerVisible(false);
         AntMessage.success('已加载历史对话');
 
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+        }, 100);
+
         // 从历史记录中提取每个 agent 最后使用的 model
         const lastModelByAgent = {};
         for (const msg of result.data) {
@@ -507,6 +519,10 @@ const SmartQueryPage = () => {
             ]);
           }
 
+          if (!abortControllerRef.current) {
+            abortControllerRef.current = new AbortController();
+          }
+
           queryDataService.reconnectStream(
             sessionId,
             (data) => {
@@ -523,23 +539,47 @@ const SmartQueryPage = () => {
 
               if (data.type === 'message_complete') {
                 const msgId = currentAssistantMessageIdRef.current;
-                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, streaming: false } : m));
+                setMessages((prev) => {
+                  const idx = prev.findIndex(m => m.id === msgId);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], streaming: false };
+                  return next;
+                });
               }
 
               if (data.type === 'reasoning') {
                 const msgId = currentAssistantMessageIdRef.current;
-                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, reasoning: (m.reasoning || '') + (data.content || '') } : m));
+                setMessages((prev) => {
+                  const idx = prev.findIndex(m => m.id === msgId);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], reasoning: (next[idx].reasoning || '') + (data.content || '') };
+                  return next;
+                });
               }
 
               if (data.type === 'text') {
                 const msgId = currentAssistantMessageIdRef.current;
-                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, content: (m.content || '') + (data.content || '') } : m));
+                setMessages((prev) => {
+                  const idx = prev.findIndex(m => m.id === msgId);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], content: (next[idx].content || '') + (data.content || '') };
+                  return next;
+                });
               }
 
               if (data.type === 'tool') {
                 const msgId = currentAssistantMessageIdRef.current;
                 const toolKey = `${msgId}_${data.call_id || data.tool}`;
-                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, tools: { ...(m.tools || {}), [toolKey]: { tool: data.tool, state: data.state, input: data.input, output: data.output, questionId: data.call_id || null } } } : m));
+                setMessages((prev) => {
+                  const idx = prev.findIndex(m => m.id === msgId);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next[idx] = { ...next[idx], tools: { ...(next[idx].tools || {}), [toolKey]: { tool: data.tool, state: data.state, input: data.input, output: data.output, questionId: data.call_id || null } } };
+                  return next;
+                });
               }
 
               if (data.type === 'session_idle') {
@@ -553,7 +593,8 @@ const SmartQueryPage = () => {
             },
             () => {
               setLoading(false);
-            }
+            },
+            abortControllerRef.current.signal
           );
         }
       }
@@ -937,13 +978,13 @@ const SmartQueryPage = () => {
 
   const sendMessage = async (text) => {
     if (!text || !text.trim()) return;
-    setQuestion(text);
-    await new Promise(resolve => setTimeout(resolve, 0));
-    await handleSend();
+    setQuestion('');
+    await handleSend(text);
   };
 
-  const handleSend = async () => {
-    if (!question.trim() && selectedImages.length === 0) return;
+  const handleSend = async (overrideQuestion) => {
+    const q = overrideQuestion !== undefined ? overrideQuestion : question;
+    if (!q.trim() && selectedImages.length === 0) return;
 
     // 检查模型余量
     if (currentModel && currentModel.monthlyLimit > 0 && (currentModel.currentUsage || 0) >= currentModel.monthlyLimit) {
@@ -954,7 +995,7 @@ const SmartQueryPage = () => {
     const userMessage = {
       id: Date.now().toString(),
       type: 'user',
-      content: question,
+      content: q,
       images: selectedImages.length > 0 ? [...selectedImages] : null,
       timestamp: new Date(),
       agent: currentAgent,
@@ -966,7 +1007,7 @@ const SmartQueryPage = () => {
     setMessages((prev) => [...prev, userMessage]);
     
     const currentImages = [...selectedImages];
-    setQuestion('');
+    if (overrideQuestion === undefined) setQuestion('');
     setSelectedImages([]);
     setLoading(true);
     setError(null);
@@ -999,7 +1040,7 @@ const SmartQueryPage = () => {
 
     try {
       await queryDataService.queryDataStream(
-        question || (currentImages.length > 0 ? '请分析这些图片' : ''),
+        q || (currentImages.length > 0 ? '请分析这些图片' : ''),
         conversationId,
         (data) => {
           if (data.type === 'session' && data.conversation_id && !conversationId) {
@@ -1044,24 +1085,24 @@ const SmartQueryPage = () => {
           
           if (data.type === 'reasoning') {
             const msgId = currentAssistantMessageIdRef.current;
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === msgId
-                  ? { ...msg, reasoning: (msg.reasoning || '') + (data.content || ''), streaming: true }
-                  : msg
-              )
-            );
+            setMessages((prev) => {
+              const idx = prev.findIndex(m => m.id === msgId);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], reasoning: (next[idx].reasoning || '') + (data.content || ''), streaming: true };
+              return next;
+            });
           }
           
           if (data.type === 'text') {
             const msgId = currentAssistantMessageIdRef.current;
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === msgId
-                  ? { ...msg, content: (msg.content || '') + (data.content || ''), streaming: true }
-                  : msg
-              )
-            );
+            setMessages((prev) => {
+              const idx = prev.findIndex(m => m.id === msgId);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], content: (next[idx].content || '') + (data.content || ''), streaming: true };
+              return next;
+            });
           }
           
           if (data.type === 'tool') {
@@ -1125,7 +1166,8 @@ const SmartQueryPage = () => {
         },
         currentImages.length > 0 ? currentImages.map(img => ({ base64: img.base64, name: img.name })) : null,
         currentAgent,
-        currentModel
+        currentModel,
+        abortControllerRef.current.signal
       );
     } catch (err) {
       setError(err.message || '查询失败，请稍后重试');
@@ -1596,7 +1638,7 @@ const SmartQueryPage = () => {
                   <Button
                     key={index}
                     icon={item.icon}
-                    onClick={() => setQuestion(item.text)}
+                    onClick={() => sendMessage(item.text)}
                     size="small"
                     style={{
                       height: 'auto',

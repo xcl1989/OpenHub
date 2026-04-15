@@ -30,6 +30,15 @@ from app.models.question import (
 router = APIRouter(tags=["查询"])
 
 
+def _cleanup_old_logs(log_dir: Path, max_age_days: int = 7):
+    import time
+
+    now = time.time()
+    for f in log_dir.glob("request_*.log"):
+        if now - f.stat().st_mtime > max_age_days * 86400:
+            f.unlink(missing_ok=True)
+
+
 @router.get("/")
 async def root():
     """API 根路径"""
@@ -210,6 +219,7 @@ async def query_data_stream(
 
         log_dir = Path(__file__).parent / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+        _cleanup_old_logs(log_dir)
         request_log = (
             log_dir / f"request_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         )

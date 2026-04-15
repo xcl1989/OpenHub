@@ -30,7 +30,5 @@ class Config:
     REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 
-    MODEL_CONFIG_FILE = Path(__file__).parent.parent / "config" / "model4.json"
-
 
 config = Config()
