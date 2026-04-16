@@ -555,4 +555,38 @@ export const skillService = {
   },
 };
 
+export const notificationService = {
+  getUnread: async () => {
+    const response = await apiClient.get('/notifications', { params: { unread: 'true' } });
+    return response.data;
+  },
+  getAll: async () => {
+    const response = await apiClient.get('/notifications');
+    return response.data;
+  },
+  markRead: async (id) => {
+    const response = await apiClient.post(`/notifications/${id}/read`);
+    return response.data;
+  },
+};
+
+export const taskService = {
+  getTasks: async () => {
+    const response = await apiClient.get('/tasks');
+    return response.data;
+  },
+  updateTask: async (taskId, data) => {
+    const response = await apiClient.put(`/tasks/${taskId}`, data);
+    return response.data;
+  },
+  toggleTask: async (taskId) => {
+    const response = await apiClient.post(`/tasks/${taskId}/toggle`);
+    return response.data;
+  },
+  runTask: async (taskId) => {
+    const response = await apiClient.post(`/tasks/${taskId}/run`);
+    return response.data;
+  },
+};
+
 export default apiClient;

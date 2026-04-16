@@ -1,6 +1,8 @@
+import asyncio
+import json
 from fastapi import APIRouter, HTTPException, Depends
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, validate_token
 from app import database
 from app.models.query import ArchiveRequest
 from app.services.stream import is_session_processing
@@ -70,7 +72,6 @@ async def get_messages(session_id: str, current_user: dict = Depends(get_current
 async def get_image(image_id: int, current_user: dict = Depends(get_current_user)):
     """获取单张图片的 base64 数据"""
     try:
-        import base64
 
         image_data = database.get_image_by_id(image_id)
         if not image_data:
@@ -175,3 +176,180 @@ async def sync_user_skills(current_user: dict = Depends(get_current_user)):
 
     discovered = sync_skills_from_workspace(workspace)
     return {"success": True, "message": f"已同步 {len(discovered)} 个技能"}
+
+
+@router.get("/api/notifications")
+async def get_notifications(
+    unread: str = "false",
+    current_user: dict = Depends(get_current_user),
+):
+    from app import database as db
+
+    unread_only = unread.lower() in ("true", "1", "yes")
+    notifs = db.get_notifications(current_user["id"], unread_only=unread_only)
+    return {"ok": True, "notifications": notifs}
+
+
+@router.post("/api/notifications/{notif_id}/read")
+async def mark_notification_read(
+    notif_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    from app import database as db
+
+    ok = db.mark_notification_read(notif_id)
+    return {"ok": ok}
+
+
+class _NotifEncoder(json.JSONEncoder):
+    def default(self, obj):
+        from datetime import datetime, date
+
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, date):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+@router.get("/api/notifications/stream")
+async def notification_stream(
+    token: str,
+):
+    from fastapi.responses import StreamingResponse
+    from fastapi import HTTPException
+    from app.services.notif_stream import subscribe, unsubscribe
+    import asyncio
+    import json
+
+    user = validate_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="认证失败")
+
+    user_id = user["id"]
+    queue = subscribe(user_id)
+
+    async def event_generator():
+        from datetime import datetime, date
+
+        try:
+            notifs = await asyncio.to_thread(
+                database.get_notifications, user_id, unread_only=True
+            )
+            if notifs:
+                for n in notifs:
+                    for k, v in n.items():
+                        if isinstance(v, (datetime, date)):
+                            n[k] = v.isoformat()
+                yield f"data: {json.dumps({'type': 'unread_count', 'count': len(notifs)})}\n\n"
+
+            while True:
+                try:
+                    notif = await asyncio.wait_for(queue.get(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                yield f"data: {json.dumps({'type': 'notification', 'data': notif}, cls=_NotifEncoder)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+        finally:
+            unsubscribe(user_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/api/tasks")
+async def get_tasks(current_user: dict = Depends(get_current_user)):
+    tasks = database.get_tasks_by_user(current_user["id"])
+    return {"ok": True, "tasks": tasks}
+
+
+@router.put("/api/tasks/{task_id}")
+async def update_task(
+    task_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    from pydantic import BaseModel
+    from typing import Optional
+
+    class TaskUpdateRequest(BaseModel):
+        name: Optional[str] = None
+        question: Optional[str] = None
+        cron_expression: Optional[str] = None
+
+    from fastapi import Body
+
+    body: TaskUpdateRequest = Body(...)
+
+    task = database.get_task(task_id)
+    if not task or task["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not fields:
+        return {"ok": True, "task": task}
+
+    if "cron_expression" in fields:
+        parts = fields["cron_expression"].strip().split()
+        if len(parts) != 5:
+            raise HTTPException(
+                status_code=422, detail="cron 表达式必须是 5 个字段（分 时 日 月 周）"
+            )
+
+    database.update_task(task_id, **fields)
+    updated_task = database.get_task(task_id)
+
+    from app.services.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+    if scheduler and updated_task.get("enabled"):
+        scheduler.add_job(updated_task)
+    elif scheduler and not updated_task.get("enabled"):
+        scheduler.remove_job(task_id)
+
+    return {"ok": True, "task": updated_task}
+
+
+@router.post("/api/tasks/{task_id}/toggle")
+async def toggle_task(task_id: int, current_user: dict = Depends(get_current_user)):
+    task = database.get_task(task_id)
+    if not task or task["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    new_enabled = 0 if task["enabled"] else 1
+    database.toggle_task(task_id, new_enabled)
+
+    from app.services.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+    if scheduler:
+        if new_enabled:
+            scheduler.add_job(database.get_task(task_id))
+        else:
+            scheduler.remove_job(task_id)
+
+    return {"ok": True, "enabled": new_enabled}
+
+
+@router.post("/api/tasks/{task_id}/run")
+async def run_task(task_id: int, current_user: dict = Depends(get_current_user)):
+    task = database.get_task(task_id)
+    if not task or task["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    from app.services.task_executor import execute_task
+
+    asyncio.create_task(execute_task(task_id))
+    return {"ok": True, "message": "任务已触发"}

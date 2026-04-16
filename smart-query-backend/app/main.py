@@ -11,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.opencode_client import opencode_client
 from app.services import opencode_launcher
-from app.api import auth, query, session, admin, files
+from app.services.scheduler import create_scheduler
+from app.api import auth, query, session, admin, files, internal
 
 
 @asynccontextmanager
@@ -37,8 +38,12 @@ async def lifespan(app: FastAPI):
         else:
             print("[OpencodeLauncher] WARNING: opencode not available", flush=True)
 
+    scheduler = create_scheduler()
+    await scheduler.start()
+
     yield
 
+    await scheduler.shutdown()
     await opencode_client.close()
 
 
@@ -62,6 +67,7 @@ app.include_router(query.router)
 app.include_router(session.router)
 app.include_router(admin.router)
 app.include_router(files.router)
+app.include_router(internal.router)
 
 
 if __name__ == "__main__":

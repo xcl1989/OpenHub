@@ -290,7 +290,10 @@ export default function ChatInput({
   setModel,
   conversationId,
   messages,
-  fileInputRef
+  fileInputRef,
+  currentTodos,
+  todoPanelVisible,
+  onToggleTodoPanel,
 }) {
   const [isMobile, setIsMobile] = useState(false);
 
@@ -392,6 +395,30 @@ export default function ChatInput({
             </Tag>
           );
         })()}
+        {currentTodos && currentTodos.length > 0 && (
+          <button
+            onClick={onToggleTodoPanel}
+            style={{
+              marginLeft: 'auto',
+              border: 'none',
+              background: todoPanelVisible ? '#e6f7ff' : '#f5f5f5',
+              color: todoPanelVisible ? '#1890ff' : '#6b7280',
+              borderRadius: 6,
+              padding: '4px 10px',
+              fontSize: 12,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              flexShrink: 0,
+              transition: 'all 0.2s',
+            }}
+            title="任务列表"
+          >
+            <span style={{ fontSize: 13 }}>📋</span>
+            <span>任务</span>
+          </button>
+        )}
       </div>
       <div style={{ 
         display: 'flex', 

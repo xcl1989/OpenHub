@@ -44,7 +44,7 @@ def _get_opencode_home() -> str:
 
 def _init_user_workspace(username: str) -> str:
     """
-    初始化用户工作空间：创建目录 + 复制 .opencode + AGENTS.md
+    初始化用户工作空间：创建目录 + 复制 .opencode + AGENTS.md + tools + node_modules
 
     Returns:
         workspace_path
@@ -52,21 +52,32 @@ def _init_user_workspace(username: str) -> str:
     ws_path = WORKSPACE_ROOT / username
     ws_path.mkdir(parents=True, exist_ok=True)
 
+    project_root = Path(__file__).parent.parent.parent.parent
+    project_opencode = project_root / ".opencode"
+
     opencode_dir = ws_path / ".opencode"
-    if not opencode_dir.exists():
-        opencode_home = Path(_get_opencode_home()) / ".opencode"
-        if opencode_home.exists():
-            shutil.copytree(
-                str(opencode_home),
-                str(opencode_dir),
-                ignore=shutil.ignore_patterns("node_modules", ".DS_Store"),
-            )
+    if not opencode_dir.exists() and project_opencode.exists():
+        shutil.copytree(
+            str(project_opencode),
+            str(opencode_dir),
+            ignore=shutil.ignore_patterns("node_modules", ".DS_Store"),
+        )
 
     agents_md = ws_path / "AGENTS.md"
     if not agents_md.exists():
-        src_agents = Path(_get_opencode_home()) / "AGENTS.md"
+        src_agents = project_root / "AGENTS.md"
         if src_agents.exists():
             shutil.copy2(str(src_agents), str(agents_md))
+
+    tools_src = project_opencode / "tools"
+    tools_dst = opencode_dir / "tools"
+    if tools_src.exists() and not tools_dst.exists():
+        shutil.copytree(str(tools_src), str(tools_dst))
+
+    nm_src = project_opencode / "node_modules"
+    nm_dst = opencode_dir / "node_modules"
+    if nm_src.exists() and not nm_dst.exists():
+        shutil.copytree(str(nm_src), str(nm_dst))
 
     return str(ws_path)
 

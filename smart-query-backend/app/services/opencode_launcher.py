@@ -60,6 +60,11 @@ async def start_opencode(
     env["OPENCODE_SERVER_USERNAME"] = username
     env["OPENCODE_SERVER_PASSWORD"] = password
 
+    from app.config import config
+
+    if config.INTERNAL_API_SECRET:
+        env["OPENCODE_INTERNAL_SECRET"] = config.INTERNAL_API_SECRET
+
     proc = subprocess.Popen(
         [executable, "serve", "--hostname", "0.0.0.0"],
         cwd=workdir,

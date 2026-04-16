@@ -8,6 +8,7 @@ Reads DB config from .env file.
 
 import os
 import sys
+import shutil
 from pathlib import Path
 
 dotenv_path = Path(__file__).parent / ".env"
@@ -161,6 +162,53 @@ TABLES = {
             UNIQUE KEY idx_user_skill (user_id, skill_name)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    "scheduled_tasks": """
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            name VARCHAR(200) NOT NULL,
+            question TEXT NOT NULL,
+            cron_expression VARCHAR(100) NOT NULL,
+            model_id VARCHAR(100) DEFAULT NULL,
+            agent VARCHAR(50) DEFAULT 'build',
+            enabled TINYINT DEFAULT 1,
+            last_run_at DATETIME DEFAULT NULL,
+            next_run_at DATETIME DEFAULT NULL,
+            run_count INT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_user_id (user_id),
+            INDEX idx_enabled (enabled)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "scheduled_task_runs": """
+        CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            task_id INT NOT NULL,
+            session_id VARCHAR(100) DEFAULT NULL,
+            status ENUM('running','success','failed') DEFAULT 'running',
+            result_preview VARCHAR(500) DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME DEFAULT NULL,
+            duration_ms INT DEFAULT NULL,
+            INDEX idx_task_id (task_id),
+            INDEX idx_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "notifications": """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            task_id INT DEFAULT NULL,
+            task_name VARCHAR(200) DEFAULT NULL,
+            type VARCHAR(50) DEFAULT 'task_result',
+            result_preview VARCHAR(500) DEFAULT NULL,
+            is_read TINYINT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_read (user_id, is_read)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -191,7 +239,48 @@ def init_database():
                 "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)",
                 ("admin", admin_hash, 1),
             )
+            user_id = cursor.lastrowid
             print(f"  [OK] admin user created (password: {admin_password})")
+
+            workspace_dir = Path(__file__).parent / "workspace" / "admin"
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+
+            project_root = Path(__file__).parent.parent
+            project_opencode = project_root / ".opencode"
+
+            opencode_dir = workspace_dir / ".opencode"
+            if not opencode_dir.exists() and project_opencode.exists():
+                shutil.copytree(
+                    str(project_opencode),
+                    str(opencode_dir),
+                    ignore=shutil.ignore_patterns("node_modules", ".DS_Store"),
+                )
+                print(f"  [OK] admin workspace .opencode/ copied")
+
+            tools_dst = opencode_dir / "tools"
+            tools_src = project_opencode / "tools"
+            if tools_src.exists() and not tools_dst.exists():
+                shutil.copytree(str(tools_src), str(tools_dst))
+                print(f"  [OK] admin workspace tools/ copied")
+
+            nm_dst = opencode_dir / "node_modules"
+            nm_src = project_opencode / "node_modules"
+            if nm_src.exists() and not nm_dst.exists():
+                shutil.copytree(str(nm_src), str(nm_dst))
+                print(f"  [OK] admin workspace node_modules/ copied")
+
+            agents_md = workspace_dir / "AGENTS.md"
+            if not agents_md.exists():
+                src_agents = project_root / "AGENTS.md"
+                if src_agents.exists():
+                    shutil.copy2(str(src_agents), str(agents_md))
+                    print(f"  [OK] admin workspace AGENTS.md copied")
+
+            cursor.execute(
+                "UPDATE users SET workspace_path = %s WHERE id = %s",
+                (str(workspace_dir), user_id),
+            )
+            print(f"  [OK] admin workspace initialized at {workspace_dir}")
 
         conn.commit()
         cursor.close()

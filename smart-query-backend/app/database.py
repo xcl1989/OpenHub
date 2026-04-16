@@ -601,7 +601,7 @@ def get_user_by_id(user_id: int) -> dict | None:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, username, password_hash, disabled, is_admin FROM users WHERE id = %s",
+                    "SELECT id, username, password_hash, disabled, is_admin, workspace_path FROM users WHERE id = %s",
                     (user_id,),
                 )
                 return cursor.fetchone()
@@ -1105,6 +1105,12 @@ def sync_tools_from_opencode() -> list:
         "apply_patch": ("dangerous", "应用补丁文件"),
         "usage_toast": ("safe", "显示用量提示"),
         "usage_table": ("safe", "显示用量表格"),
+        "scheduled_task_create": ("custom", "创建定时任务"),
+        "scheduled_task_list": ("custom", "查看定时任务列表"),
+        "scheduled_task_update": ("custom", "修改定时任务"),
+        "scheduled_task_delete": ("custom", "删除定时任务"),
+        "scheduled_task_pause": ("custom", "暂停定时任务"),
+        "scheduled_task_resume": ("custom", "恢复定时任务"),
     }
     for name, (risk, desc) in builtin_tools.items():
         upsert_tool_permission(name, risk, desc)
@@ -1222,3 +1228,246 @@ def sync_skills_from_workspace(workspace_path: str) -> list:
                 upsert_skill(name, desc)
                 discovered.append(name)
     return discovered
+
+
+def get_user_by_workspace(workspace_path: str):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, username, is_admin, workspace_path FROM users WHERE workspace_path = %s",
+                    (workspace_path,),
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"根据工作空间获取用户失败：{e}")
+        return None
+
+
+def create_task(
+    user_id: int,
+    name: str,
+    question: str,
+    cron_expression: str,
+    model_id: str = None,
+    agent: str = "build",
+):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO scheduled_tasks (user_id, name, question, cron_expression, model_id, agent) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, name, question, cron_expression, model_id, agent),
+                )
+                conn.commit()
+                task_id = cursor.lastrowid
+                cursor.execute(
+                    "SELECT * FROM scheduled_tasks WHERE id = %s", (task_id,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"创建定时任务失败：{e}")
+        return None
+
+
+def get_tasks_by_user(user_id: int):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM scheduled_tasks WHERE user_id = %s ORDER BY created_at DESC",
+                    (user_id,),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户定时任务失败：{e}")
+        return []
+
+
+def get_all_enabled_tasks():
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM scheduled_tasks WHERE enabled = 1")
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取启用的定时任务失败：{e}")
+        return []
+
+
+def get_task(task_id: int):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM scheduled_tasks WHERE id = %s", (task_id,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取定时任务失败：{e}")
+        return None
+
+
+def update_task(task_id: int, **fields):
+    if not fields:
+        return False
+    set_clause = ", ".join(f"{k} = %s" for k in fields)
+    values = list(fields.values()) + [task_id]
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE scheduled_tasks SET {set_clause} WHERE id = %s",
+                    values,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新定时任务失败：{e}")
+        return False
+
+
+def delete_task(task_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM scheduled_tasks WHERE id = %s", (task_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除定时任务失败：{e}")
+        return False
+
+
+def toggle_task(task_id: int, enabled: int) -> bool:
+    return update_task(task_id, enabled=enabled)
+
+
+def update_task_last_run(task_id: int, next_run_at=None):
+    fields = {"last_run_at": "NOW()"}
+    if next_run_at:
+        fields["next_run_at"] = next_run_at
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE id = %s",
+                    (task_id,),
+                )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"更新任务执行时间失败：{e}")
+        return False
+
+
+def create_task_run(task_id: int) -> int:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO scheduled_task_runs (task_id, status) VALUES (%s, 'running')",
+                    (task_id,),
+                )
+                conn.commit()
+                return cursor.lastrowid
+    except Exception as e:
+        print(f"创建执行记录失败：{e}")
+        return None
+
+
+def complete_task_run(
+    run_id: int,
+    status: str,
+    result_preview: str = None,
+    duration_ms: int = None,
+    error_message: str = None,
+):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE scheduled_task_runs SET status=%s, result_preview=%s, duration_ms=%s, error_message=%s, completed_at=NOW() WHERE id=%s",
+                    (status, result_preview, duration_ms, error_message, run_id),
+                )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"更新执行记录失败：{e}")
+        return False
+
+
+def update_task_run_session(run_id: int, session_id: str):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE scheduled_task_runs SET session_id=%s WHERE id=%s",
+                    (session_id, run_id),
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"更新执行记录会话失败：{e}")
+
+
+def get_task_runs(task_id: int, limit: int = 20):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM scheduled_task_runs WHERE task_id = %s ORDER BY started_at DESC LIMIT %s",
+                    (task_id, limit),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取执行记录失败：{e}")
+        return []
+
+
+def create_notification(
+    user_id: int, task_id: int = None, task_name: str = None, result_preview: str = None
+):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO notifications (user_id, task_id, task_name, result_preview) VALUES (%s, %s, %s, %s)",
+                    (user_id, task_id, task_name, result_preview),
+                )
+                conn.commit()
+                notif_id = cursor.lastrowid
+                cursor.execute("SELECT * FROM notifications WHERE id = %s", (notif_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"创建通知失败：{e}")
+        return None
+
+
+def get_notifications(user_id: int, unread_only: bool = False):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                sql = "SELECT * FROM notifications WHERE user_id = %s"
+                if unread_only:
+                    sql += " AND is_read = 0"
+                sql += " ORDER BY created_at DESC LIMIT 50"
+                cursor.execute(sql, (user_id,))
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取通知失败：{e}")
+        return []
+
+
+def mark_notification_read(notif_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE notifications SET is_read = 1 WHERE id = %s",
+                    (notif_id,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"标记通知已读失败：{e}")
+        return False

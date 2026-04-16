@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   StopOutlined,
   SyncOutlined,
+  ScheduleOutlined,
 } from '@ant-design/icons';
 import { adminService } from '../services/api';
 
@@ -16,6 +17,7 @@ const RISK_CONFIG = {
   dangerous: { color: '#ff4d4f', label: '危险', icon: <LockOutlined /> },
   moderate: { color: '#faad14', label: '敏感', icon: <QuestionCircleOutlined /> },
   safe: { color: '#52c41a', label: '安全', icon: <CheckCircleOutlined /> },
+  custom: { color: '#1890ff', label: '自定义', icon: <ScheduleOutlined /> },
 };
 
 const ACTION_OPTIONS = [
@@ -90,6 +92,7 @@ function ToolPermissionManager({ visible }) {
   const dangerousTools = tools.filter(t => t.risk_level === 'dangerous');
   const moderateTools = tools.filter(t => t.risk_level === 'moderate');
   const safeTools = tools.filter(t => t.risk_level === 'safe');
+  const customTools = tools.filter(t => t.risk_level === 'custom');
 
   const mobileColumns = [
     {
@@ -217,7 +220,7 @@ function ToolPermissionManager({ visible }) {
       </div>
 
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
+        <Col xs={12} sm={6}>
           <Card size="small" styles={{ body: { padding: '8px 12px' } }}>
             <Space>
               <StopOutlined style={{ color: '#ff4d4f' }} />
@@ -225,7 +228,7 @@ function ToolPermissionManager({ visible }) {
             </Space>
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={12} sm={6}>
           <Card size="small" styles={{ body: { padding: '8px 12px' } }}>
             <Space>
               <QuestionCircleOutlined style={{ color: '#faad14' }} />
@@ -233,7 +236,7 @@ function ToolPermissionManager({ visible }) {
             </Space>
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={12} sm={6}>
           <Card size="small" styles={{ body: { padding: '8px 12px' } }}>
             <Space>
               <CheckCircleOutlined style={{ color: '#52c41a' }} />
@@ -241,8 +244,21 @@ function ToolPermissionManager({ visible }) {
             </Space>
           </Card>
         </Col>
+        <Col xs={12} sm={6}>
+          <Card size="small" styles={{ body: { padding: '8px 12px' } }}>
+            <Space>
+              <ScheduleOutlined style={{ color: '#1890ff' }} />
+              <span style={{ fontSize: isMobile ? 12 : 14 }}>自定义：{customTools.length}</span>
+            </Space>
+          </Card>
+        </Col>
       </Row>
 
+      {customTools.length > 0 && renderToolTable(
+        customTools,
+        '自定义工具（定时任务等扩展功能）',
+        <ScheduleOutlined style={{ color: '#1890ff' }} />
+      )}
       {dangerousTools.length > 0 && renderToolTable(
         dangerousTools,
         '危险工具（建议拒绝）',

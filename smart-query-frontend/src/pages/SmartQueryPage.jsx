@@ -36,7 +36,8 @@ import {
   SettingOutlined,
   FolderOpenOutlined,
   SwapOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  ClockCircleOutlined
 } from '@ant-design/icons';
 import { queryDataService, authService, clearAuthToken, diffService } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -47,6 +48,9 @@ import ToolCall from '../components/ToolCall';
 import FileManager from '../components/FileManager';
 import DiffViewer from '../components/DiffViewer';
 import UserSkillManager from '../components/UserSkillManager';
+import TaskManager from '../components/TaskManager';
+import NotificationBell from '../components/NotificationBell';
+import TodoFloatPanel from '../components/TodoFloatPanel';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
 import jsPDF from 'jspdf';
@@ -94,6 +98,7 @@ const SmartQueryPage = () => {
   const [fileManagerVisible, setFileManagerVisible] = useState(false);
   const [diffViewerVisible, setDiffViewerVisible] = useState(false);
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
+  const [taskManagerVisible, setTaskManagerVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
@@ -101,6 +106,8 @@ const SmartQueryPage = () => {
   const [archiveModalVisible, setArchiveModalVisible] = useState(false);
   const [sessionToArchive, setSessionToArchive] = useState(null);
   const [archiving, setArchiving] = useState(false);
+  const [currentTodos, setCurrentTodos] = useState(null);
+  const [todoPanelVisible, setTodoPanelVisible] = useState(false);
 
   useEffect(() => {
     authService.getMe()
@@ -416,6 +423,8 @@ const SmartQueryPage = () => {
     setLoading(false);
     setIdleState(false);
     setStreamingMessageId(null);
+    setCurrentTodos(null);
+    setTodoPanelVisible(false);
 
     try {
       const result = await queryDataService.getMessages(sessionId);
@@ -592,6 +601,17 @@ const SmartQueryPage = () => {
               if (data.type === 'tool') {
                 const msgId = currentAssistantMessageIdRef.current;
                 const toolKey = `${msgId}_${data.call_id || data.tool}`;
+
+                if (data.tool === 'todowrite' && data.input && data.input.todos) {
+                  setCurrentTodos(data.input.todos);
+                  setTodoPanelVisible((prev) => {
+                    if (!prev && data.input.todos && data.input.todos.length > 0) {
+                      return true;
+                    }
+                    return prev;
+                  });
+                }
+
                 setMessages((prev) => {
                   const idx = prev.findIndex(m => m.id === msgId);
                   if (idx === -1) return prev;
@@ -628,6 +648,8 @@ const SmartQueryPage = () => {
       setMessages([]);
       setConversationId('');
       setError(null);
+      setCurrentTodos(null);
+      setTodoPanelVisible(false);
       AntMessage.success('已新建对话');
     }
   };
@@ -1042,6 +1064,8 @@ const SmartQueryPage = () => {
     setLoading(true);
     setError(null);
     setIdleState(false);
+    setCurrentTodos(null);
+    setTodoPanelVisible(false);
 
     // 记录查询开始时间
     queryStartTimeRef.current = Date.now();
@@ -1138,10 +1162,20 @@ const SmartQueryPage = () => {
           if (data.type === 'tool') {
             const msgId = currentAssistantMessageIdRef.current;
             const toolKey = `${msgId}_${data.call_id || data.part_id || data.tool}`;
-            
+
+            if (data.tool === 'todowrite' && data.input && data.input.todos) {
+              setCurrentTodos(data.input.todos);
+              setTodoPanelVisible((prev) => {
+                if (!prev && data.input.todos && data.input.todos.length > 0) {
+                  return true;
+                }
+                return prev;
+              });
+            }
+
             // 如果没有 pendingQuestionId，但 input 中有 questions，使用 call_id 作为 questionId
             const questionId = pendingQuestionIdRef.current || data.call_id || null;
-            
+
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === msgId
@@ -1407,6 +1441,12 @@ const SmartQueryPage = () => {
         isMobile={isMobile}
       />
 
+      <TaskManager
+        open={taskManagerVisible}
+        onClose={() => setTaskManagerVisible(false)}
+        isMobile={isMobile}
+      />
+
       {/* 归档确认 Modal */}
       <Modal
         title="确认归档"
@@ -1608,7 +1648,10 @@ const SmartQueryPage = () => {
       }}>
         <Button
           icon={<HistoryOutlined />}
-          onClick={() => setHistoryDrawerVisible(true)}
+          onClick={() => {
+            setTaskManagerVisible(false);
+            setHistoryDrawerVisible(true);
+          }}
           size="small"
           type="text"
           title="历史记录"
@@ -1619,6 +1662,7 @@ const SmartQueryPage = () => {
           icon={<FolderOpenOutlined />}
           onClick={() => {
             setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
             setFileManagerVisible(true);
           }}
           size="small"
@@ -1643,6 +1687,7 @@ const SmartQueryPage = () => {
           icon={<ThunderboltOutlined />}
           onClick={() => {
             setFileManagerVisible(false);
+            setTaskManagerVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1651,6 +1696,19 @@ const SmartQueryPage = () => {
         >
           <span className="toolbar-btn-text">技能管理</span>
         </Button>
+        <Button
+          icon={<ClockCircleOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="任务管理"
+        >
+          <span className="toolbar-btn-text">任务管理</span>
+        </Button>
+        <NotificationBell />
       </div>
 
       {/* Main Card */}
@@ -1667,108 +1725,124 @@ const SmartQueryPage = () => {
         styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } }}
       >
         {/* Messages Area */}
-        <div 
-          ref={messagesContainerRef}
-          className="messages-area" 
-          style={{ 
+        <div
+          style={{
             flex: 1,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            padding: '12px',
-            background: '#ffffff',
-            WebkitOverflowScrolling: 'touch'
-          }}>
-          {messages.length === 0 ? (
-            <div style={{ 
-              textAlign: 'center', 
-              padding: '40px 16px',
-              color: '#6b7280'
-            }}>
-              <div style={{ 
-                width: 64,
-                height: 64,
-                margin: '0 auto 20px',
-                background: '#f3f4f6',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
+            display: 'flex',
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
+          <div
+            ref={messagesContainerRef}
+            className="messages-area"
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: '12px',
+              background: '#ffffff',
+              WebkitOverflowScrolling: 'touch'
+            }}
+          >
+            {messages.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '40px 16px',
+                color: '#6b7280'
               }}>
-                <QuestionCircleOutlined style={{ fontSize: 32, color: '#9ca3af' }} />
-              </div>
-              <Title level={4} style={{ color: '#1f2937', margin: '0 0 12px', fontSize: '18px' }}>
-                开始对话
-              </Title>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 24, fontSize: '13px' }}>
-                试试以下示例，或直接输入您的指令
-              </Text>
-              
-              <div style={{ 
-                display: 'flex', 
-                gap: 8, 
-                justifyContent: 'center',
-                flexWrap: 'wrap',
-                width: '100%'
-              }}>
-                {exampleQuestions.map((item, index) => (
-                  <Button
-                    key={index}
-                    icon={item.icon}
-                    onClick={() => sendMessage(item.text)}
-                    size="small"
-                    style={{
-                      height: 'auto',
-                      padding: '8px 16px',
-                      borderRadius: 8,
-                      border: '1px solid #e5e7eb',
-                      background: '#ffffff',
-                      color: '#374151',
-                      textAlign: 'left',
-                      transition: 'all 0.2s',
-                      fontSize: '12px',
-                      maxWidth: '100%'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = item.color;
-                      e.currentTarget.style.color = item.color;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb';
-                      e.currentTarget.style.color = '#374151';
-                    }}
-                  >
-                    {item.text}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {(() => {
-                const lastAssistantMessageId = [...messages].reverse().find(m => m.type === 'assistant')?.id;
-                
-                return messages.map((message) => {
-                  return message.type === 'user' ? (
-                    <UserMessage key={message.id} message={message} />
-                  ) : (
-                    <AssistantMessage 
-                      key={message.id} 
-                      message={message}
-                      filterContent={filterContent}
-                      messageTimings={messageTimings}
-                      handleQuestionSubmit={handleQuestionSubmit}
-                      pendingQuestionIdRef={pendingQuestionIdRef}
-                      formatDuration={formatDuration}
-                      idleState={idleState}
-                      lastAssistantMessageId={lastAssistantMessageId}
-                    />
-                  );
-                });
-              })()}
+                <div style={{
+                  width: 64,
+                  height: 64,
+                  margin: '0 auto 20px',
+                  background: '#f3f4f6',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <QuestionCircleOutlined style={{ fontSize: 32, color: '#9ca3af' }} />
+                </div>
+                <Title level={4} style={{ color: '#1f2937', margin: '0 0 12px', fontSize: '18px' }}>
+                  开始对话
+                </Title>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 24, fontSize: '13px' }}>
+                  试试以下示例，或直接输入您的指令
+                </Text>
 
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+                <div style={{
+                  display: 'flex',
+                  gap: 8,
+                  justifyContent: 'center',
+                  flexWrap: 'wrap',
+                  width: '100%'
+                }}>
+                  {exampleQuestions.map((item, index) => (
+                    <Button
+                      key={index}
+                      icon={item.icon}
+                      onClick={() => sendMessage(item.text)}
+                      size="small"
+                      style={{
+                        height: 'auto',
+                        padding: '8px 16px',
+                        borderRadius: 8,
+                        border: '1px solid #e5e7eb',
+                        background: '#ffffff',
+                        color: '#374151',
+                        textAlign: 'left',
+                        transition: 'all 0.2s',
+                        fontSize: '12px',
+                        maxWidth: '100%'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = item.color;
+                        e.currentTarget.style.color = item.color;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb';
+                        e.currentTarget.style.color = '#374151';
+                      }}
+                    >
+                      {item.text}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {(() => {
+                  const lastAssistantMessageId = [...messages].reverse().find(m => m.type === 'assistant')?.id;
+
+                  return messages.map((message) => {
+                    return message.type === 'user' ? (
+                      <UserMessage key={message.id} message={message} />
+                    ) : (
+                      <AssistantMessage
+                        key={message.id}
+                        message={message}
+                        filterContent={filterContent}
+                        messageTimings={messageTimings}
+                        handleQuestionSubmit={handleQuestionSubmit}
+                        pendingQuestionIdRef={pendingQuestionIdRef}
+                        formatDuration={formatDuration}
+                        idleState={idleState}
+                        lastAssistantMessageId={lastAssistantMessageId}
+                      />
+                    );
+                  });
+                })()}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+
+          <TodoFloatPanel
+            todos={currentTodos}
+            visible={todoPanelVisible}
+            onClose={() => setTodoPanelVisible(false)}
+          />
         </div>
 
         {/* Input Area */}
@@ -1792,6 +1866,9 @@ const SmartQueryPage = () => {
           conversationId={conversationId}
           messages={messages}
           fileInputRef={fileInputRef}
+          currentTodos={currentTodos}
+          todoPanelVisible={todoPanelVisible}
+          onToggleTodoPanel={() => setTodoPanelVisible((v) => !v)}
         />
       </Card>
 

@@ -56,5 +56,4 @@ smart-query-backend/workspace/*/
 *.bak2
 
 #opencode files
-.opencode
 AGENTS.md
