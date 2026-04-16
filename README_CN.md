@@ -26,6 +26,8 @@
 | **文件管理器** | 浏览、预览、搜索、下载工作空间文件 |
 | **工具权限管理** | 按用户配置工具的拒绝/询问/允许权限 |
 | **用量统计** | 按模型、用户、时间段可视化 token 消耗和请求数 |
+| **定时任务** | 通过 UI 或 AI 对话创建 cron 任务，支持编辑/暂停/恢复 |
+| **任务通知** | 实时 SSE 推送任务结果，通知铃铛支持已读/未读页签 |
 | **移动端适配** | 完整移动端优化 UI，底部面板、触摸友好 |
 | **24 个技能包** | PDF、Excel、Word、PPT、邮件、新闻、前端设计等 |
 
@@ -63,7 +65,8 @@
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    MySQL 数据库                              │  │
 │  │  users · sessions · messages · model_permissions · usage    │  │
-│  │  system_config · images                                      │  │
+│  │  system_config · images · scheduled_tasks                  │
+│  │  scheduled_task_runs · notifications                           │
 │  └─────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -74,6 +77,9 @@
 - 每个工作空间拥有自己的 `.opencode/skills/`，不同用户可有不同技能集
 - `prompt_async` 和 `global/event` API 均传递 `?directory=`，确保加载正确的项目上下文
 - 后端启动时自动拉起 opencode serve（可在管理面板配置）
+- **APScheduler** 驱动 cron 定时任务：启动时注册所有启用的任务，创建/更新任务时同步调度器
+- 任务执行器通过 SSE 事件收集 AI 响应，自动过滤 reasoning 文本，生成干净的通知预览
+- 通知通过进程内异步队列实时推送，无需 Redis（Redis 仅用于 JWT 令牌缓存）
 
 ---
 
@@ -217,9 +223,13 @@ OpenHub/
 │   │   │   ├── auth.py            #   登录/登出/JWT
 │   │   │   ├── query.py           #   查询端点（流式 + 非流式）
 │   │   │   ├── admin.py           #   管理后台：用户、模型、opencode 控制
-│   │   │   └── session.py         #   会话管理
+│   │   │   ├── session.py         #   会话 + 任务 + 通知端点
+│   │   │   └── internal.py        #   AI 工具调用的内部 API
 │   │   ├── services/
 │   │   │   ├── stream.py          #   SSE 事件收集器 + 流生成器
+│   │   │   ├── scheduler.py       #   APScheduler cron 任务调度器
+│   │   │   ├── task_executor.py   #   静默任务执行器（含 SSE reasoning 过滤）
+│   │   │   ├── notif_stream.py    #   通知 SSE 推送分发器
 │   │   │   ├── opencode_client.py #   opencode HTTP 客户端
 │   │   │   └── opencode_launcher.py #  opencode 进程管理
 │   │   ├── core/
@@ -251,6 +261,9 @@ OpenHub/
 │   │   │   ├── ToolCall.jsx       #     工具调用展示
 │   │   │   ├── MessageBubble.jsx  #     聊天消息气泡
 │   │   │   ├── MarkdownRenderer.jsx #   Markdown + 代码高亮
+│   │   │   ├── TaskManager.jsx    #     定时任务管理抽屉（行内编辑）
+│   │   │   ├── NotificationBell.jsx #   通知铃铛（已读/未读页签）
+│   │   │   ├── TodoFloatPanel.jsx #     AI 任务进度浮动面板
 │   │   │   └── TableWithChart.jsx #     图表表格组件
 │   │   └── services/
 │   │       └── api.js             #     Axios API 客户端 + 服务对象
@@ -308,6 +321,23 @@ OpenHub/
 | `/api/skills/{skill_name}` | PUT | 启用/禁用技能 |
 | `/api/skills/sync` | POST | 从工作空间同步技能 |
 
+### 定时任务（用户）
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/tasks` | GET | 获取当前用户的定时任务列表 |
+| `/api/tasks/{id}` | PUT | 更新任务（名称、问题、cron 表达式） |
+| `/api/tasks/{id}/toggle` | POST | 开启或暂停任务 |
+| `/api/tasks/{id}/run` | POST | 手动触发任务执行 |
+
+### 通知
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/notifications` | GET | 获取通知列表（支持 `?unread=true`） |
+| `/api/notifications/{id}/read` | POST | 标记通知为已读 |
+| `/api/notifications/stream` | GET | SSE 流实时接收通知（需 `?token=`） |
+
 ### 管理后台
 
 | 端点 | 方法 | 说明 |
@@ -338,6 +368,20 @@ OpenHub/
 | `/api/admin/system-config` | GET/PUT | 系统配置（默认模型等） |
 | `/api/admin/usage/stats` | GET | 用量统计数据 |
 
+### 内部 API
+
+> 需要 `X-Internal-Token` 请求头，仅限 `127.0.0.1` 访问。
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/internal/tasks` | GET | 获取任务列表（通过 `directory` 查询参数） |
+| `/api/internal/tasks` | POST | 创建定时任务 |
+| `/api/internal/tasks/{id}` | PUT | 更新任务 |
+| `/api/internal/tasks/{id}` | DELETE | 删除任务 |
+| `/api/internal/tasks/{id}/pause` | POST | 暂停任务 |
+| `/api/internal/tasks/{id}/resume` | POST | 恢复任务 |
+| `/api/internal/tasks/{id}/run` | POST | 手动触发任务执行 |
+
 ---
 
 ## 配置说明
@@ -354,7 +398,10 @@ OpenHub/
 | `OPENCODE_USERNAME` | `opencode` | opencode 认证用户名 |
 | `OPENCODE_PASSWORD` | - | opencode 认证密码 |
 | `JWT_SECRET_KEY` | - | JWT 签名密钥 |
-| `REDIS_HOST` | `localhost` | Redis 地址（可选） |
+| `REDIS_HOST` | `localhost` | Redis 地址（可选，用于 JWT 令牌缓存） |
+| `REDIS_PORT` | `6379` | Redis 端口 |
+| `REDIS_DB` | `0` | Redis 数据库编号 |
+| `INTERNAL_API_SECRET` | - | 内部 API 调用密钥 |
 
 ### 前端环境变量 (`smart-query-frontend/.env`)
 

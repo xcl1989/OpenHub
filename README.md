@@ -28,6 +28,8 @@
 | **File Browser** | Browse, preview, search, and download workspace files |
 | **Tool Permissions** | Per-user deny/ask/allow control for AI tools |
 | **Usage Statistics** | Visual charts and tables tracking usage by model and user |
+| **Scheduled Tasks** | Cron-based task scheduling via UI or AI chat, with edit/pause/resume controls |
+| **Task Notifications** | Real-time SSE push for task results, read/unread tabs in notification bell |
 | **Mobile Responsive** | Full mobile-optimized UI with bottom sheets and touch-friendly controls |
 | **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, and more |
 
@@ -65,7 +67,8 @@
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    MySQL Database                            │  │
 │  │  users · sessions · messages · model_permissions · usage    │  │
-│  │  system_config · images                                      │  │
+│  │  system_config · images · scheduled_tasks                  │
+│  │  scheduled_task_runs · notifications                           │
 │  └─────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -76,6 +79,9 @@
 - Each workspace has its own `.opencode/skills/`, so different users can have different skill sets
 - `prompt_async` and `global/event` APIs pass `?directory=` to ensure opencode loads the correct project context
 - Backend auto-starts opencode serve on launch (configurable via admin panel)
+- **APScheduler** drives cron-based scheduled tasks: jobs are registered on startup and rescheduled on task create/update
+- Task executor collects AI responses via SSE, automatically filtering out reasoning text to produce clean notification previews
+- Notifications are pushed in-process via an async queue — no Redis required (Redis is used for JWT token and workspace cache only)
 
 ---
 
@@ -219,9 +225,13 @@ OpenHub/
 │   │   │   ├── auth.py            #   Login/logout/JWT
 │   │   │   ├── query.py           #   Query endpoints (stream + non-stream)
 │   │   │   ├── admin.py           #   Admin: users, models, opencode control
-│   │   │   └── session.py         #   Session management
+│   │   │   ├── session.py         #   Session + task + notification endpoints
+│   │   │   └── internal.py        #   Internal API for AI tool calls
 │   │   ├── services/
 │   │   │   ├── stream.py          #   SSE event collector + stream generator
+│   │   │   ├── scheduler.py       #   APScheduler cron task scheduler
+│   │   │   ├── task_executor.py   #   Silent task executor with SSE reasoning filter
+│   │   │   ├── notif_stream.py    #   Notification SSE push dispatcher
 │   │   │   ├── opencode_client.py #   HTTP client for opencode API
 │   │   │   └── opencode_launcher.py #  Process management for opencode serve
 │   │   ├── core/
@@ -253,6 +263,9 @@ OpenHub/
 │   │   │   ├── ToolCall.jsx       #     Tool invocation display
 │   │   │   ├── MessageBubble.jsx  #     Chat message bubble
 │   │   │   ├── MarkdownRenderer.jsx #   Markdown + code highlighting
+│   │   │   ├── TaskManager.jsx    #     Scheduled task drawer with inline editing
+│   │   │   ├── NotificationBell.jsx #   Notification bell with read/unread tabs
+│   │   │   ├── TodoFloatPanel.jsx #    AI task progress float panel
 │   │   │   └── TableWithChart.jsx #     Recharts table component
 │   │   └── services/
 │   │       └── api.js             #     Axios API client + service objects
@@ -310,6 +323,23 @@ OpenHub/
 | `/api/skills/{skill_name}` | PUT | Enable/disable a skill |
 | `/api/skills/sync` | POST | Sync skills from workspace |
 
+### Tasks (User)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/tasks` | GET | List current user's scheduled tasks |
+| `/api/tasks/{id}` | PUT | Update task (name, question, cron_expression) |
+| `/api/tasks/{id}/toggle` | POST | Enable or pause a task |
+| `/api/tasks/{id}/run` | POST | Manually trigger a task execution |
+
+### Notifications
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/notifications` | GET | List notifications (supports `?unread=true`) |
+| `/api/notifications/{id}/read` | POST | Mark a notification as read |
+| `/api/notifications/stream` | GET | SSE stream for real-time notifications (requires `?token=`) |
+
 ### Admin
 
 | Endpoint | Method | Description |
@@ -340,6 +370,20 @@ OpenHub/
 | `/api/admin/system-config` | GET/PUT | System configuration (default models, etc.) |
 | `/api/admin/usage/stats` | GET | Get usage statistics |
 
+### Internal API
+
+> Requires `X-Internal-Token` header. Only accessible from `127.0.0.1`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/internal/tasks` | GET | List tasks (by `directory` query param) |
+| `/api/internal/tasks` | POST | Create a scheduled task |
+| `/api/internal/tasks/{id}` | PUT | Update a task |
+| `/api/internal/tasks/{id}` | DELETE | Delete a task |
+| `/api/internal/tasks/{id}/pause` | POST | Pause a task |
+| `/api/internal/tasks/{id}/resume` | POST | Resume a paused task |
+| `/api/internal/tasks/{id}/run` | POST | Manually trigger a task |
+
 ---
 
 ## Configuration
@@ -356,7 +400,10 @@ OpenHub/
 | `OPENCODE_USERNAME` | `opencode` | opencode auth username |
 | `OPENCODE_PASSWORD` | - | opencode auth password |
 | `JWT_SECRET_KEY` | - | JWT signing key |
-| `REDIS_HOST` | `localhost` | Redis host (optional) |
+| `REDIS_HOST` | `localhost` | Redis host (optional, for JWT token cache) |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_DB` | `0` | Redis database number |
+| `INTERNAL_API_SECRET` | - | Secret token for internal API calls |
 
 ### Frontend Environment Variables (`smart-query-frontend/.env`)
 
