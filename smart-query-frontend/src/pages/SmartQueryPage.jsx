@@ -33,14 +33,20 @@ import {
   LogoutOutlined,
   PlusOutlined,
   HistoryOutlined,
-  SettingOutlined
+  SettingOutlined,
+  FolderOpenOutlined,
+  SwapOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
-import { queryDataService, authService, clearAuthToken } from '../services/api';
+import { queryDataService, authService, clearAuthToken, diffService } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import ChatInput from '../components/ChatInput';
 import HistoryDrawer from '../components/HistoryDrawer';
 import ToolCall from '../components/ToolCall';
+import FileManager from '../components/FileManager';
+import DiffViewer from '../components/DiffViewer';
+import UserSkillManager from '../components/UserSkillManager';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
 import jsPDF from 'jspdf';
@@ -77,6 +83,7 @@ const SmartQueryPage = () => {
   const queryStartTimeRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const [containerWidth, setContainerWidth] = useState(800);
+  const [isMobile, setIsMobile] = useState(false);
   
   const { measureText, clearMeasurementCache } = usePretextMeasure(containerWidth);
   
@@ -84,6 +91,9 @@ const SmartQueryPage = () => {
   const [historySessions, setHistorySessions] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
+  const [fileManagerVisible, setFileManagerVisible] = useState(false);
+  const [diffViewerVisible, setDiffViewerVisible] = useState(false);
+  const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
@@ -96,6 +106,15 @@ const SmartQueryPage = () => {
     authService.getMe()
       .then((result) => setIsAdmin(result.data?.is_admin || false))
       .catch(() => setIsAdmin(false));
+  }, []);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
   const scrollToBottom = () => {
@@ -983,7 +1002,18 @@ const SmartQueryPage = () => {
   };
 
   const handleSend = async (overrideQuestion) => {
-    const q = overrideQuestion !== undefined ? overrideQuestion : question;
+    const rawQ = overrideQuestion !== undefined ? overrideQuestion : question;
+    // 确保 q 是字符串
+    let q;
+    if (typeof rawQ === 'string') {
+      q = rawQ;
+    } else if (typeof rawQ === 'object' && rawQ !== null) {
+      console.error('question is object:', rawQ);
+      q = String(rawQ || '');
+    } else {
+      q = String(rawQ || '');
+    }
+    
     if (!q.trim() && selectedImages.length === 0) return;
 
     // 检查模型余量
@@ -1324,17 +1354,18 @@ const SmartQueryPage = () => {
   ];
 
   return (
-    <div 
+    <div
       className="smart-query-container"
-      style={{ 
-        maxWidth: 1200, 
-        margin: '0 auto', 
+      style={{
+        maxWidth: 1200,
+        margin: '0 auto',
         padding: '16px',
         height: '100vh',
         boxSizing: 'border-box',
         background: '#f5f7fa',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        overflow: 'hidden'
       }}
     >
       {/* 历史会话 Drawer */}
@@ -1357,6 +1388,23 @@ const SmartQueryPage = () => {
         }}
         onScroll={handleHistoryScroll}
         newConversationDisabled={!!conversationId && messages.length === 0}
+      />
+
+      <FileManager
+        open={fileManagerVisible}
+        onClose={() => setFileManagerVisible(false)}
+      />
+
+      <DiffViewer
+        open={diffViewerVisible}
+        onClose={() => setDiffViewerVisible(false)}
+        conversationId={conversationId}
+      />
+
+      <UserSkillManager
+        open={skillManagerVisible}
+        onClose={() => setSkillManagerVisible(false)}
+        isMobile={isMobile}
       />
 
       {/* 归档确认 Modal */}
@@ -1487,94 +1535,122 @@ const SmartQueryPage = () => {
         </div>
       </Modal>
 
-      {/* Header */}
-      <div className="smart-query-header" style={{ 
-        marginBottom: 12,
+      {/* Header - Row 1: Title + User Actions */}
+      <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 8
+        marginBottom: 8,
+        flexShrink: 0,
       }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          flex: 1,
-          minWidth: 0
-        }}>
-          <Button
-            type="text"
-            icon={<HistoryOutlined />}
-            onClick={() => setHistoryDrawerVisible(true)}
-            size="small"
-          />
-          <Title 
-            level={1} 
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+          <Title
+            level={4}
             className="smart-query-title"
-            style={{ 
-              margin: 0,
-              fontSize: '18px',
-              fontWeight: 600,
-              color: '#1f2937'
-            }}
+            style={{ margin: 0, color: '#1f2937', flexShrink: 0 }}
           >
             OpenHub 平台
           </Title>
           {conversationId && (
-            <Tag
-              style={{
-                fontSize: 10,
-                background: '#f3f4f6',
-                color: '#6b7280',
-                border: '1px solid #e5e7eb',
-                borderRadius: 4,
-                padding: '1px 6px',
-                fontWeight: 500
-              }}
-            >
+            <Tag style={{
+              fontSize: 10,
+              background: '#f0f5ff',
+              color: '#1890ff',
+              border: '1px solid #91d5ff',
+              borderRadius: 4,
+              padding: '1px 6px',
+              fontWeight: 500,
+              flexShrink: 0,
+              maxWidth: isMobile ? 60 : 'none',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}>
               {conversationId.slice(-6)}
             </Tag>
           )}
         </div>
-        <Space size="small">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {isAdmin && (
             <Button
               icon={<SettingOutlined />}
               onClick={() => navigate('/admin')}
               size="small"
-              style={{
-                color: '#7c3aed',
-                borderColor: '#e5e7eb'
-              }}
-              title="用户管理"
+              style={{ color: '#7c3aed' }}
+              title="管理后台"
             >
-              管理
+              <span className="header-btn-text">管理后台</span>
             </Button>
           )}
           <Button
             icon={<LogoutOutlined />}
             onClick={handleLogout}
             size="small"
-            style={{
-              color: '#6b7280',
-              borderColor: '#e5e7eb'
-            }}
+            style={{ color: '#6b7280' }}
+            title="退出"
           >
-            退出
+            <span className="header-btn-text">退出</span>
           </Button>
-        </Space>
+        </div>
       </div>
-      <div style={{ textAlign: 'center', marginTop: -6 }}>
-        <Text 
-          className="smart-query-subtitle"
-          style={{ 
-            fontSize: '11px',
-            color: '#6b7280'
-          }}
+
+      {/* Header - Row 2: Toolbar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '8px 12px',
+        background: '#fafbfc',
+        borderRadius: 8,
+        border: '1px solid #f0f0f0',
+        marginBottom: 12,
+        flexShrink: 0,
+      }}>
+        <Button
+          icon={<HistoryOutlined />}
+          onClick={() => setHistoryDrawerVisible(true)}
+          size="small"
+          type="text"
+          title="历史记录"
         >
-          输入您的指令或问题
-        </Text>
+          <span className="toolbar-btn-text">历史记录</span>
+        </Button>
+        <Button
+          icon={<FolderOpenOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setFileManagerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="文件管理"
+        >
+          <span className="toolbar-btn-text">文件管理</span>
+        </Button>
+        {/*
+        <Button
+          icon={<SwapOutlined />}
+          onClick={() => setDiffViewerVisible(true)}
+          size="small"
+          type="text"
+          disabled={!conversationId}
+          title="查看变更"
+        >
+          <span className="toolbar-btn-text">查看变更</span>
+        </Button>
+        */}
+        <Button
+          icon={<ThunderboltOutlined />}
+          onClick={() => {
+            setFileManagerVisible(false);
+            setSkillManagerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="技能管理"
+        >
+          <span className="toolbar-btn-text">技能管理</span>
+        </Button>
       </div>
 
       {/* Main Card */}
@@ -1728,9 +1804,16 @@ const SmartQueryPage = () => {
           type="error"
           showIcon
           closable
-          style={{ 
-            marginBottom: 24,
-            borderRadius: 8
+          style={{
+            marginBottom: 16,
+            borderRadius: 8,
+            position: 'fixed',
+            bottom: 80,
+            left: 16,
+            right: 16,
+            maxWidth: 1200,
+            margin: '0 auto',
+            zIndex: 100,
           }}
         />
       )}
@@ -1746,7 +1829,16 @@ const SmartQueryPage = () => {
             transform: translateY(0);
           }
         }
-        
+
+        /* 全局滚动控制 - 防止移动端弹性滚动传递到页面 */
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          height: 100%;
+          overscroll-behavior: none;
+          touch-action: pan-y;
+        }
+
         /* 桌面端样式优化 */
         @media (min-width: 769px) {
           .message-space {
@@ -2034,30 +2126,65 @@ const SmartQueryPage = () => {
         
         /* 移动端优化 */
         @media (max-width: 768px) {
+          html, body {
+            height: 100%;
+            overscroll-behavior: none;
+            touch-action: pan-y;
+            overflow: hidden;
+            width: 100%;
+          }
+
           .smart-query-container {
             padding: 4px !important;
+            padding-bottom: calc(4px + env(safe-area-inset-bottom)) !important;
+            height: 100svh !important;
+            overscroll-behavior: none;
+            touch-action: pan-y;
+            overflow: hidden;
+            max-width: 100vw !important;
+            box-sizing: border-box !important;
           }
-          
+
+          .smart-query-container > * {
+            min-width: 0 !important;
+            max-width: 100% !important;
+          }
+
+          .smart-query-container .ant-card {
+            max-width: 100% !important;
+            overflow: hidden !important;
+          }
+
+          .smart-query-container .ant-card-body {
+            max-width: 100% !important;
+            overflow: hidden !important;
+          }
+
           .smart-query-header {
             margin-bottom: 12px !important;
           }
-          
+
           .smart-query-title {
             font-size: 18px !important;
           }
-          
+
           .smart-query-subtitle {
             font-size: 11px !important;
           }
-          
+
           .messages-area {
             padding: 8px !important;
-            minHeight: 60vh !important;
-            max-height: 70vh !important;
+            touch-action: pan-y;
+            -webkit-overflow-scrolling: touch;
+            overflow-x: hidden !important;
+            overflow-y: auto !important;
           }
-          
+
           .message-bubble {
             font-size: 13px !important;
+            max-width: calc(100vw - 16px) !important;
+            overflow-wrap: break-word !important;
+            word-break: break-word !important;
           }
           
           .message-bubble .ant-card-body {
@@ -2066,6 +2193,15 @@ const SmartQueryPage = () => {
           
           .input-area {
             padding: 8px 10px !important;
+            padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+          }
+
+          .input-area > * {
+            max-width: 100% !important;
+            overflow: hidden !important;
           }
           
           .markdown-content h1 {
@@ -2089,6 +2225,24 @@ const SmartQueryPage = () => {
           .markdown-content pre {
             font-size: 11px !important;
             padding: 8px !important;
+          }
+
+          /* 移动端隐藏工具栏按钮文字 */
+          .toolbar-btn-text {
+            display: none !important;
+          }
+
+          /* 移动端隐藏Header按钮文字 */
+          .header-btn-text {
+            display: none !important;
+          }
+
+          /* 强制按钮水平排列 */
+          .ant-btn {
+            display: inline-flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            white-space: nowrap !important;
           }
         }
         

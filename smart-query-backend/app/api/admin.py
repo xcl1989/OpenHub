@@ -554,6 +554,16 @@ async def admin_get_opencode_status(admin: dict = Depends(get_admin_user)):
     return {"success": True, "data": result}
 
 
+@router.get("/usage/stats")
+async def admin_get_usage_stats(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    from app.database import get_usage_stats
+
+    return {"success": True, "data": get_usage_stats(days)}
+
+
 @router.post("/opencode/restart")
 async def admin_restart_opencode(admin: dict = Depends(get_admin_user)):
     """重启 opencode 服务"""
@@ -595,3 +605,131 @@ async def admin_start_opencode(admin: dict = Depends(get_admin_user)):
         return {"success": False, "error": "opencode 启动失败，请检查配置"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@router.get("/tools")
+async def admin_get_tools(admin: dict = Depends(get_admin_user)):
+    from app.database import sync_tools_from_opencode, get_all_tool_permissions
+
+    sync_tools_from_opencode()
+    tools = get_all_tool_permissions()
+    return {"success": True, "data": tools}
+
+
+@router.put("/tools/{tool_name}")
+async def admin_update_tool(
+    tool_name: str, action: str = "allow", admin: dict = Depends(get_admin_user)
+):
+    from app.database import update_tool_global_action
+
+    update_tool_global_action(tool_name, action)
+    return {"success": True}
+
+
+@router.get("/users/{user_id}/tools")
+async def admin_get_user_tools(user_id: int, admin: dict = Depends(get_admin_user)):
+    from app.database import get_user_tool_permissions
+
+    return {"success": True, "data": get_user_tool_permissions(user_id)}
+
+
+@router.put("/users/{user_id}/tools/{tool_name}")
+async def admin_set_user_tool(
+    user_id: int, tool_name: str, action: str, admin: dict = Depends(get_admin_user)
+):
+    from app.database import set_user_tool_permission
+
+    return {"success": set_user_tool_permission(user_id, tool_name, action)}
+
+
+@router.delete("/users/{user_id}/tools/{tool_name}")
+async def admin_delete_user_tool(
+    user_id: int, tool_name: str, admin: dict = Depends(get_admin_user)
+):
+    from app.database import delete_user_tool_permission
+
+    return {"success": delete_user_tool_permission(user_id, tool_name)}
+
+
+@router.post("/tools/sync")
+async def admin_sync_tools_config(admin: dict = Depends(get_admin_user)):
+    from app.database import get_all_tool_permissions, get_user_tool_permissions
+    from app.services.opencode_client import opencode_client
+
+    tools = get_all_tool_permissions()
+    permission = {}
+    for t in tools:
+        if t["global_action"] != "allow":
+            permission[t["tool_name"]] = t["global_action"]
+
+    if permission:
+        resp = await opencode_client.patch(
+            "/config",
+            json={"permission": permission},
+        )
+        if resp.status_code != 200:
+            return {"success": False, "error": "同步到 opencode 失败"}
+
+    return {"success": True, "message": f"已同步 {len(permission)} 个工具权限"}
+
+
+@router.get("/skills")
+async def admin_get_skills(admin: dict = Depends(get_admin_user)):
+    from app.database import (
+        sync_skills_from_workspace,
+        get_all_skills,
+        get_system_config,
+    )
+
+    workdir = get_system_config("opencode_workdir")
+    if workdir:
+        sync_skills_from_workspace(workdir)
+    skills = get_all_skills()
+    return {"success": True, "data": skills}
+
+
+@router.put("/skills/{skill_name}")
+async def admin_update_skill(
+    skill_name: str, enabled: bool = True, admin: dict = Depends(get_admin_user)
+):
+    from app.database import update_skill_global_enabled
+
+    update_skill_global_enabled(skill_name, enabled)
+    return {"success": True}
+
+
+@router.get("/users/{user_id}/skills")
+async def admin_get_user_skills(user_id: int, admin: dict = Depends(get_admin_user)):
+    from app.database import get_user_skill_permissions
+
+    return {"success": True, "data": get_user_skill_permissions(user_id)}
+
+
+@router.put("/users/{user_id}/skills/{skill_name}")
+async def admin_set_user_skill(
+    user_id: int, skill_name: str, action: str, admin: dict = Depends(get_admin_user)
+):
+    from app.database import set_user_skill_permission
+
+    return {"success": set_user_skill_permission(user_id, skill_name, action)}
+
+
+@router.delete("/users/{user_id}/skills/{skill_name}")
+async def admin_delete_user_skill(
+    user_id: int, skill_name: str, admin: dict = Depends(get_admin_user)
+):
+    from app.database import delete_user_skill_permission
+
+    return {"success": delete_user_skill_permission(user_id, skill_name)}
+
+
+@router.post("/skills/sync")
+async def admin_sync_skills(admin: dict = Depends(get_admin_user)):
+    from app.database import get_system_config, sync_skills_from_workspace
+
+    workdir = get_system_config("opencode_workdir")
+    if not workdir:
+        return {"success": False, "error": "opencode 工作目录未配置"}
+
+    discovered = sync_skills_from_workspace(workdir)
+    return {"success": True, "message": f"已同步 {len(discovered)} 个技能"}

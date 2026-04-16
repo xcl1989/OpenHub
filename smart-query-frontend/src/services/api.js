@@ -222,7 +222,8 @@ export const queryDataService = {
 
         if (hasError) return;
 
-        if (lastEventType !== 'complete' && retryCount < MAX_RETRIES) {
+        const terminalEvents = ['session_idle', 'message_complete'];
+        if (!terminalEvents.includes(lastEventType) && retryCount < MAX_RETRIES) {
           await new Promise(r => setTimeout(r, 2000));
           if (signal?.aborted) {
             onEnd?.(sessionId || conversationId);
@@ -457,6 +458,99 @@ export const adminService = {
   },
   initUserWorkspace: async (userId) => {
     const response = await apiClient.post(`/admin/users/${userId}/init-workspace`);
+    return response.data;
+  },
+  getUsageStats: async (days = 30) => {
+    const response = await apiClient.get('/admin/usage/stats', { params: { days } });
+    return response.data;
+  },
+  getTools: async () => {
+    const response = await apiClient.get('/admin/tools');
+    return response.data;
+  },
+  updateTool: async (toolName, action) => {
+    const response = await apiClient.put(`/admin/tools/${toolName}`, null, { params: { action } });
+    return response.data;
+  },
+  getUserTools: async (userId) => {
+    const response = await apiClient.get(`/admin/users/${userId}/tools`);
+    return response.data;
+  },
+  setUserTool: async (userId, toolName, action) => {
+    const response = await apiClient.put(`/admin/users/${userId}/tools/${toolName}`, null, { params: { action } });
+    return response.data;
+  },
+  removeUserTool: async (userId, toolName) => {
+    const response = await apiClient.delete(`/admin/users/${userId}/tools/${toolName}`);
+    return response.data;
+  },
+  syncToolsConfig: async () => {
+    const response = await apiClient.post('/admin/tools/sync');
+    return response.data;
+  },
+  getSkills: async () => {
+    const response = await apiClient.get('/admin/skills');
+    return response.data;
+  },
+  updateSkill: async (skillName, enabled) => {
+    const response = await apiClient.put(`/admin/skills/${skillName}`, null, { params: { enabled } });
+    return response.data;
+  },
+  getUserSkills: async (userId) => {
+    const response = await apiClient.get(`/admin/users/${userId}/skills`);
+    return response.data;
+  },
+  setUserSkill: async (userId, skillName, action) => {
+    const response = await apiClient.put(`/admin/users/${userId}/skills/${skillName}`, null, { params: { action } });
+    return response.data;
+  },
+  removeUserSkill: async (userId, skillName) => {
+    const response = await apiClient.delete(`/admin/users/${userId}/skills/${skillName}`);
+    return response.data;
+  },
+  syncSkills: async () => {
+    const response = await apiClient.post('/admin/skills/sync');
+    return response.data;
+  },
+};
+
+export const fileService = {
+  listFiles: async (path = '') => {
+    const response = await apiClient.get('/files', { params: { path } });
+    return response.data;
+  },
+  getFileContent: async (path) => {
+    const response = await apiClient.get('/files/content', { params: { path } });
+    return response.data;
+  },
+  getDownloadUrl: (path) => {
+    const token = getAuthToken();
+    return `/api/files/download?path=${encodeURIComponent(path)}&token=${token}`;
+  },
+  searchFiles: async (query, limit = 20) => {
+    const response = await apiClient.get('/files/search', { params: { query, limit } });
+    return response.data;
+  },
+};
+
+export const diffService = {
+  getSessionDiff: async (sessionId) => {
+    const response = await apiClient.get(`/sessions/${sessionId}/diff`);
+    return response.data;
+  },
+};
+
+export const skillService = {
+  getSkills: async () => {
+    const response = await apiClient.get('/skills');
+    return response.data;
+  },
+  updateSkill: async (skillName, enabled) => {
+    const response = await apiClient.put(`/skills/${skillName}`, null, { params: { enabled } });
+    return response.data;
+  },
+  syncSkills: async () => {
+    const response = await apiClient.post('/skills/sync');
     return response.data;
   },
 };

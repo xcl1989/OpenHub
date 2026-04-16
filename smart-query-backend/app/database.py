@@ -1,5 +1,6 @@
 """数据库连接模块"""
 
+import os
 import pymysql
 import json
 from typing import Optional
@@ -866,6 +867,100 @@ def get_user_workspace(user_id: int) -> Optional[str]:
         return None
 
 
+def log_usage(
+    user_id: int,
+    session_id: str = None,
+    model_id: str = None,
+    provider_id: str = None,
+    agent: str = "build",
+    question_preview: str = None,
+    duration_ms: int = 0,
+) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO usage_logs (user_id, session_id, model_id, provider_id, agent, question_preview, duration_ms)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        user_id,
+                        session_id,
+                        model_id,
+                        provider_id,
+                        agent,
+                        question_preview[:500] if question_preview else None,
+                        duration_ms,
+                    ),
+                )
+        return True
+    except Exception as e:
+        print(f"记录使用日志失败：{e}")
+        return False
+
+
+def get_usage_stats(days: int = 30) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT DATE(created_at) as date, COUNT(*) as count
+                       FROM usage_logs
+                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                       GROUP BY DATE(created_at) ORDER BY date""",
+                    (days,),
+                )
+                daily = [
+                    {"date": str(row["date"]), "count": row["count"]}
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    """SELECT model_id, provider_id, COUNT(*) as count
+                       FROM usage_logs
+                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                       GROUP BY model_id, provider_id ORDER BY count DESC""",
+                    (days,),
+                )
+                by_model = [
+                    {
+                        "model_id": row["model_id"],
+                        "provider_id": row["provider_id"],
+                        "count": row["count"],
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    """SELECT u.username, COUNT(ul.id) as count
+                       FROM usage_logs ul JOIN users u ON ul.user_id = u.id
+                       WHERE ul.created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                       GROUP BY ul.user_id, u.username ORDER BY count DESC LIMIT 20""",
+                    (days,),
+                )
+                by_user = [
+                    {"username": row["username"], "count": row["count"]}
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    """SELECT COUNT(*) as total FROM usage_logs
+                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)""",
+                    (days,),
+                )
+                total = cursor.fetchone()["total"]
+
+                return {
+                    "daily": daily,
+                    "by_model": by_model,
+                    "by_user": by_user,
+                    "total": total,
+                    "days": days,
+                }
+    except Exception as e:
+        print(f"获取使用统计失败：{e}")
+        return {"daily": [], "by_model": [], "by_user": [], "total": 0, "days": days}
+
+
 def update_user_workspace(user_id: int, workspace_path: str) -> bool:
     """
     更新用户工作空间路径（同步更新 Redis 缓存）
@@ -894,3 +989,236 @@ def update_user_workspace(user_id: int, workspace_path: str) -> bool:
     except Exception as e:
         print(f"更新用户工作空间失败：{e}")
         return False
+
+
+def get_all_tool_permissions() -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT tool_name, risk_level, description, global_action FROM tool_permissions ORDER BY tool_name"
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取工具权限失败：{e}")
+        return []
+
+
+def upsert_tool_permission(
+    tool_name: str, risk_level: str = "safe", description: str = ""
+) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO tool_permissions (tool_name, risk_level, description)
+                       VALUES (%s, %s, %s)
+                       ON DUPLICATE KEY UPDATE risk_level=%s, description=%s, updated_at=NOW()""",
+                    (tool_name, risk_level, description, risk_level, description),
+                )
+        return True
+    except Exception as e:
+        print(f"更新工具权限失败：{e}")
+        return False
+
+
+def update_tool_global_action(tool_name: str, action: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE tool_permissions SET global_action=%s WHERE tool_name=%s",
+                    (action, tool_name),
+                )
+        return True
+    except Exception as e:
+        print(f"更新工具全局状态失败：{e}")
+        return False
+
+
+def get_user_tool_permissions(user_id: int) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT tp.tool_name, tp.risk_level, tp.description, tp.global_action,
+                       COALESCE(utp.action, 'allow') as user_action,
+                       CASE WHEN utp.id IS NULL THEN 0 ELSE 1 END as has_override
+                       FROM tool_permissions tp
+                       LEFT JOIN user_tool_permissions utp ON tp.tool_name = utp.tool_name AND utp.user_id = %s
+                       ORDER BY tp.tool_name""",
+                    (user_id,),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户工具权限失败：{e}")
+        return []
+
+
+def set_user_tool_permission(user_id: int, tool_name: str, action: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO user_tool_permissions (user_id, tool_name, action)
+                       VALUES (%s, %s, %s)
+                       ON DUPLICATE KEY UPDATE action=%s""",
+                    (user_id, tool_name, action, action),
+                )
+        return True
+    except Exception as e:
+        print(f"设置用户工具权限失败：{e}")
+        return False
+
+
+def delete_user_tool_permission(user_id: int, tool_name: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM user_tool_permissions WHERE user_id=%s AND tool_name=%s",
+                    (user_id, tool_name),
+                )
+        return True
+    except Exception as e:
+        print(f"删除用户工具权限失败：{e}")
+        return False
+
+
+def sync_tools_from_opencode() -> list:
+    builtin_tools = {
+        "bash": ("dangerous", "执行 shell 命令"),
+        "read": ("safe", "读取文件内容"),
+        "edit": ("dangerous", "编辑文件"),
+        "write": ("dangerous", "创建/覆盖文件"),
+        "grep": ("safe", "搜索文件内容"),
+        "glob": ("safe", "模式匹配文件"),
+        "list": ("safe", "列出目录内容"),
+        "webfetch": ("moderate", "获取网页内容"),
+        "websearch": ("moderate", "网络搜索"),
+        "codesearch": ("moderate", "代码搜索"),
+        "skill": ("safe", "加载技能"),
+        "question": ("safe", "向用户提问"),
+        "todowrite": ("safe", "管理待办事项"),
+        "task": ("moderate", "启动子代理"),
+        "lsp": ("safe", "LSP 代码智能"),
+        "apply_patch": ("dangerous", "应用补丁文件"),
+        "usage_toast": ("safe", "显示用量提示"),
+        "usage_table": ("safe", "显示用量表格"),
+    }
+    for name, (risk, desc) in builtin_tools.items():
+        upsert_tool_permission(name, risk, desc)
+    return list(builtin_tools.keys())
+
+
+def get_all_skills() -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT skill_name, description, globally_enabled FROM skill_registry ORDER BY skill_name"
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取技能列表失败：{e}")
+        return []
+
+
+def upsert_skill(skill_name: str, description: str = "") -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO skill_registry (skill_name, description)
+                       VALUES (%s, %s)
+                       ON DUPLICATE KEY UPDATE description=%s, updated_at=NOW()""",
+                    (skill_name, description, description),
+                )
+        return True
+    except Exception as e:
+        print(f"更新技能失败：{e}")
+        return False
+
+
+def update_skill_global_enabled(skill_name: str, enabled: bool) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE skill_registry SET globally_enabled=%s WHERE skill_name=%s",
+                    (1 if enabled else 0, skill_name),
+                )
+        return True
+    except Exception as e:
+        print(f"更新技能全局状态失败：{e}")
+        return False
+
+
+def get_user_skill_permissions(user_id: int) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT sr.skill_name, sr.description, sr.globally_enabled,
+                       COALESCE(usp.action, 'allow') as user_action,
+                       CASE WHEN usp.id IS NULL THEN 0 ELSE 1 END as has_override
+                       FROM skill_registry sr
+                       LEFT JOIN user_skill_permissions usp ON sr.skill_name = usp.skill_name AND usp.user_id = %s
+                       ORDER BY sr.skill_name""",
+                    (user_id,),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户技能权限失败：{e}")
+        return []
+
+
+def set_user_skill_permission(user_id: int, skill_name: str, action: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO user_skill_permissions (user_id, skill_name, action)
+                       VALUES (%s, %s, %s)
+                       ON DUPLICATE KEY UPDATE action=%s""",
+                    (user_id, skill_name, action, action),
+                )
+        return True
+    except Exception as e:
+        print(f"设置用户技能权限失败：{e}")
+        return False
+
+
+def delete_user_skill_permission(user_id: int, skill_name: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM user_skill_permissions WHERE user_id=%s AND skill_name=%s",
+                    (user_id, skill_name),
+                )
+        return True
+    except Exception as e:
+        print(f"删除用户技能权限失败：{e}")
+        return False
+
+
+def sync_skills_from_workspace(workspace_path: str) -> list:
+    skills_dir = os.path.join(workspace_path, ".opencode", "skills")
+    discovered = []
+    if os.path.isdir(skills_dir):
+        for name in os.listdir(skills_dir):
+            skill_path = os.path.join(skills_dir, name)
+            if os.path.isdir(skill_path):
+                desc = ""
+                readme = os.path.join(skill_path, "SKILL.md")
+                if os.path.exists(readme):
+                    with open(readme, "r", encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                        if first_line.startswith("#"):
+                            desc = first_line[1:].strip()
+                        else:
+                            desc = first_line
+                upsert_skill(name, desc)
+                discovered.append(name)
+    return discovered

@@ -2,18 +2,23 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, InputNumber, Switch, Space,
   message, Popconfirm, Tag, Typography, Breadcrumb, Spin, Collapse,
-  Menu, Layout, Select,
+  Menu, Layout, Select, Drawer,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   UserOutlined, HomeOutlined, ArrowLeftOutlined,
   ApiOutlined, DownOutlined, UpOutlined,
   SettingOutlined, CloudOutlined, CloudServerOutlined, KeyOutlined,
+  BarChartOutlined, SafetyOutlined, ThunderboltOutlined,
+  MenuOutlined,
 } from '@ant-design/icons';
 import {
   Link, useNavigate, useLocation,
 } from 'react-router-dom';
 import { adminService } from '../services/api';
+import UsageStats from '../components/UsageStats';
+import ToolPermissionManager from '../components/ToolPermissionManager';
+import SkillManager from '../components/SkillManager';
 
 const { Title, Text } = Typography;
 const { Sider, Content } = Layout;
@@ -213,6 +218,290 @@ function ModelPermissionModal({ visible, userId, username, onClose }) {
           )}
         </div>
       )}
+      </Modal>
+  );
+}
+
+function ToolPermissionModal({ visible, userId, username, onClose }) {
+  const [tools, setTools] = useState([]);
+  const [permissions, setPermissions] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [searchText, setSearchText] = useState('');
+
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    setSearchText('');
+    adminService.getUserTools(userId)
+      .then((res) => {
+        if (res.success) {
+          setTools(res.data || []);
+          const perms = {};
+          for (const t of res.data || []) {
+            perms[t.tool_name] = {
+              global_action: t.global_action || 'allow',
+              user_action: t.user_action || 'allow',
+              has_override: t.has_override || 0,
+            };
+          }
+          setPermissions(perms);
+        }
+      })
+      .catch(() => message.error('加载工具权限失败'))
+      .finally(() => setLoading(false));
+  }, [visible, userId]);
+
+  const handleActionChange = async (toolName, action) => {
+    try {
+      await adminService.setUserTool(userId, toolName, action);
+      setPermissions(prev => ({
+        ...prev,
+        [toolName]: { ...prev[toolName], user_action: action, has_override: 1 },
+      }));
+      message.success(`${toolName} 已设置为 ${action === 'deny' ? '拒绝' : action === 'ask' ? '审批' : '允许'}`);
+    } catch {
+      message.error('更新失败');
+    }
+  };
+
+  const handleRemoveOverride = async (toolName) => {
+    try {
+      await adminService.removeUserTool(userId, toolName);
+      setPermissions(prev => ({
+        ...prev,
+        [toolName]: { ...prev[toolName], user_action: prev[toolName].global_action, has_override: 0 },
+      }));
+      message.success(`${toolName} 已恢复全局设置`);
+    } catch {
+      message.error('移除失败');
+    }
+  };
+
+  const filteredTools = searchText
+    ? tools.filter(t => t.tool_name.toLowerCase().includes(searchText.toLowerCase()))
+    : tools;
+
+  const grouped = { dangerous: [], moderate: [], safe: [] };
+  for (const t of filteredTools) {
+    const level = t.risk_level || 'safe';
+    if (!grouped[level]) grouped[level] = [];
+    grouped[level].push(t);
+  }
+
+  const ACTION_CONFIG = {
+    deny: { color: '#ff4d4f', label: '拒绝' },
+    ask: { color: '#faad14', label: '审批' },
+    allow: { color: '#52c41a', label: '允许' },
+  };
+
+  const renderToolRow = (t) => {
+    const p = permissions[t.tool_name] || { global_action: 'allow', user_action: 'allow', has_override: 0 };
+    return (
+      <div key={t.tool_name} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 0', borderBottom: '1px solid #fafafa',
+      }}>
+        <div style={{ flex: 1 }}>
+          <Tag color="blue">{t.tool_name}</Tag>
+          {p.has_override ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              全局: <Tag size="small" color={ACTION_CONFIG[p.global_action]?.color}>{ACTION_CONFIG[p.global_action]?.label}</Tag>
+            </Text>
+          ) : null}
+        </div>
+        <Space size="middle">
+          <Select
+            value={p.has_override ? p.user_action : p.global_action}
+            onChange={(val) => handleActionChange(t.tool_name, val)}
+            size="small"
+            style={{ width: 90 }}
+          >
+            <Select.Option value="deny"><Text style={{ color: '#ff4d4f' }}>拒绝</Text></Select.Option>
+            <Select.Option value="ask"><Text style={{ color: '#faad14' }}>审批</Text></Select.Option>
+            <Select.Option value="allow"><Text style={{ color: '#52c41a' }}>允许</Text></Select.Option>
+          </Select>
+          {p.has_override && (
+            <Button size="small" type="text" onClick={() => handleRemoveOverride(t.tool_name)} title="恢复全局设置">
+              重置
+            </Button>
+          )}
+        </Space>
+      </div>
+    );
+  };
+
+  return (
+    <Modal
+      title={`${username} 的工具权限`}
+      open={visible}
+      onCancel={() => onClose(false)}
+      width={600}
+      footer={[
+        <Button key="close" onClick={() => onClose(false)}>关闭</Button>,
+      ]}
+      bodyStyle={{ maxHeight: 520, overflowY: 'auto' }}
+    >
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
+      ) : tools.length === 0 ? (
+        <Text type="secondary">暂无可用工具</Text>
+      ) : (
+        <div>
+          <Input
+            placeholder="搜索工具名称..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            allowClear
+            style={{ width: 200, marginBottom: 12 }}
+            size="small"
+          />
+          {grouped.dangerous.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <Text type="dangerous" style={{ fontSize: 12, color: '#ff4d4f' }}>危险工具</Text>
+              {grouped.dangerous.map(renderToolRow)}
+            </div>
+          )}
+          {grouped.moderate.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <Text type="secondary" style={{ fontSize: 12, color: '#faad14' }}>敏感工具</Text>
+              {grouped.moderate.map(renderToolRow)}
+            </div>
+          )}
+          {grouped.safe.length > 0 && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12, color: '#52c41a' }}>安全工具</Text>
+              {grouped.safe.map(renderToolRow)}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function SkillPermissionModal({ visible, userId, username, onClose }) {
+  const [skills, setSkills] = useState([]);
+  const [permissions, setPermissions] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [searchText, setSearchText] = useState('');
+
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    setSearchText('');
+    adminService.getUserSkills(userId)
+      .then((res) => {
+        if (res.success) {
+          setSkills(res.data || []);
+          const perms = {};
+          for (const s of res.data || []) {
+            perms[s.skill_name] = {
+              globally_enabled: s.globally_enabled || 0,
+              user_action: s.user_action || 'allow',
+              has_override: s.has_override || 0,
+            };
+          }
+          setPermissions(perms);
+        }
+      })
+      .catch(() => message.error('加载技能权限失败'))
+      .finally(() => setLoading(false));
+  }, [visible, userId]);
+
+  const handleActionChange = async (skillName, action) => {
+    try {
+      await adminService.setUserSkill(userId, skillName, action);
+      setPermissions(prev => ({
+        ...prev,
+        [skillName]: { ...prev[skillName], user_action: action, has_override: 1 },
+      }));
+      message.success(`${skillName} 已设置为 ${action === 'deny' ? '禁用' : '启用'}`);
+    } catch {
+      message.error('更新失败');
+    }
+  };
+
+  const handleRemoveOverride = async (skillName) => {
+    try {
+      await adminService.removeUserSkill(userId, skillName);
+      setPermissions(prev => ({
+        ...prev,
+        [skillName]: { ...prev[skillName], user_action: prev[skillName].globally_enabled ? 'allow' : 'deny', has_override: 0 },
+      }));
+      message.success(`${skillName} 已恢复全局设置`);
+    } catch {
+      message.error('移除失败');
+    }
+  };
+
+  const filteredSkills = searchText
+    ? skills.filter(s => s.skill_name.toLowerCase().includes(searchText.toLowerCase()))
+    : skills;
+
+  const renderSkillRow = (s) => {
+    const p = permissions[s.skill_name] || { globally_enabled: 1, user_action: 'allow', has_override: 0 };
+    return (
+      <div key={s.skill_name} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 0', borderBottom: '1px solid #fafafa',
+      }}>
+        <div style={{ flex: 1 }}>
+          <Tag color="blue">{s.skill_name}</Tag>
+          {p.has_override ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              全局: <Tag size="small" color={p.globally_enabled ? 'green' : 'red'}>{p.globally_enabled ? '启用' : '禁用'}</Tag>
+            </Text>
+          ) : null}
+        </div>
+        <Space size="middle">
+          <Select
+            value={p.has_override ? p.user_action : (p.globally_enabled ? 'allow' : 'deny')}
+            onChange={(val) => handleActionChange(s.skill_name, val)}
+            size="small"
+            style={{ width: 90 }}
+          >
+            <Select.Option value="allow"><Text style={{ color: '#52c41a' }}>启用</Text></Select.Option>
+            <Select.Option value="deny"><Text style={{ color: '#ff4d4f' }}>禁用</Text></Select.Option>
+          </Select>
+          {p.has_override && (
+            <Button size="small" type="text" onClick={() => handleRemoveOverride(s.skill_name)} title="恢复全局设置">
+              重置
+            </Button>
+          )}
+        </Space>
+      </div>
+    );
+  };
+
+  return (
+    <Modal
+      title={`${username} 的技能权限`}
+      open={visible}
+      onCancel={() => onClose(false)}
+      width={550}
+      footer={[
+        <Button key="close" onClick={() => onClose(false)}>关闭</Button>,
+      ]}
+      bodyStyle={{ maxHeight: 480, overflowY: 'auto' }}
+    >
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '40px 0' }}><Spin /></div>
+      ) : skills.length === 0 ? (
+        <Text type="secondary">暂无可用技能，请先同步技能列表</Text>
+      ) : (
+        <div>
+          <Input
+            placeholder="搜索技能名称..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            allowClear
+            style={{ width: 200, marginBottom: 12 }}
+            size="small"
+          />
+          {filteredSkills.map(renderSkillRow)}
+        </div>
+      )}
     </Modal>
   );
 }
@@ -224,6 +513,8 @@ function UserManagement() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [permModal, setPermModal] = useState({ visible: false, userId: null, username: '' });
+  const [toolPermModal, setToolPermModal] = useState({ visible: false, userId: null, username: '' });
+  const [skillPermModal, setSkillPermModal] = useState({ visible: false, userId: null, username: '' });
   const [form] = Form.useForm();
 
   const fetchUsers = useCallback(async () => {
@@ -390,6 +681,20 @@ function UserManagement() {
             onClick={() => setPermModal({ visible: true, userId: record.id, username: record.username })}
             title="模型权限"
           />
+          <Button
+            type="text"
+            size="small"
+            icon={<SafetyOutlined />}
+            onClick={() => setToolPermModal({ visible: true, userId: record.id, username: record.username })}
+            title="工具权限"
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<ThunderboltOutlined />}
+            onClick={() => setSkillPermModal({ visible: true, userId: record.id, username: record.username })}
+            title="技能权限"
+          />
           {!record.workspace_path && (
             <Button
               type="text"
@@ -486,6 +791,24 @@ function UserManagement() {
         onClose={(refresh) => {
           setPermModal({ visible: false, userId: null, username: '' });
           if (refresh) fetchUsers();
+        }}
+      />
+
+      <ToolPermissionModal
+        visible={toolPermModal.visible}
+        userId={toolPermModal.userId}
+        username={toolPermModal.username}
+        onClose={() => {
+          setToolPermModal({ visible: false, userId: null, username: '' });
+        }}
+      />
+
+      <SkillPermissionModal
+        visible={skillPermModal.visible}
+        userId={skillPermModal.userId}
+        username={skillPermModal.username}
+        onClose={() => {
+          setSkillPermModal({ visible: false, userId: null, username: '' });
         }}
       />
     </div>
@@ -981,6 +1304,21 @@ const AdminPage = () => {
       icon: <CloudServerOutlined />,
       label: 'opencode 服务',
     },
+    {
+      key: 'usage-stats',
+      icon: <BarChartOutlined />,
+      label: '用量统计',
+    },
+    {
+      key: 'tools',
+      icon: <SafetyOutlined />,
+      label: '工具权限',
+    },
+    {
+      key: 'skills',
+      icon: <ThunderboltOutlined />,
+      label: '技能管理',
+    },
   ];
 
   const renderContent = () => {
@@ -993,64 +1331,139 @@ const AdminPage = () => {
     if (selectedKey === 'opencode') {
       return <OpenCodeService />;
     }
+    if (selectedKey === 'usage-stats') {
+      return <UsageStats visible={true} />;
+    }
+    if (selectedKey === 'tools') {
+      return <ToolPermissionManager visible={true} />;
+    }
+    if (selectedKey === 'skills') {
+      return <SkillManager visible={true} />;
+    }
     return null;
   };
 
+  // 移动端检测
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   return (
     <Layout style={{ minHeight: '100vh', background: '#f5f7fa' }}>
-      <Sider
-        width={200}
-        style={{
-          background: '#fff',
-          borderRight: '1px solid #f0f0f0',
-          position: 'fixed',
-          height: '100vh',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          overflow: 'auto',
-        }}
-      >
-        <div style={{
-          padding: '20px 16px 12px',
-          borderBottom: '1px solid #f0f0f0',
-        }}>
-          <Title level={5} style={{ margin: 0, color: '#1890ff' }}>
-            OpenHub
-          </Title>
-          <Text type="secondary" style={{ fontSize: 11 }}>管理后台</Text>
-        </div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          onClick={({ key }) => setSelectedKey(key)}
-          items={menuItems}
-          style={{ border: 'none', marginTop: 8 }}
+      {/* 移动端汉堡菜单按钮 */}
+      {isMobile && (
+        <Button
+          icon={<MenuOutlined />}
+          onClick={() => setDrawerVisible(true)}
+          style={{
+            position: 'fixed',
+            top: 16,
+            left: 16,
+            zIndex: 1000,
+          }}
         />
-        <div style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          padding: '12px 16px',
-          borderTop: '1px solid #f0f0f0',
-        }}>
-          <Button
-            type="text"
-            icon={<HomeOutlined />}
-            onClick={() => navigate('/')}
-            block
-            style={{ textAlign: 'left', color: '#666' }}
-          >
-            返回首页
-          </Button>
-        </div>
-      </Sider>
+      )}
 
-      <Layout style={{ marginLeft: 200, background: '#f5f7fa' }}>
-        <Content style={{ padding: '24px 32px', minHeight: '100vh' }}>
+      {/* 桌面端侧边栏 / 移动端抽屉 */}
+      {isMobile ? (
+        <Drawer
+          placement="left"
+          onClose={() => setDrawerVisible(false)}
+          open={drawerVisible}
+          width={200}
+          bodyStyle={{ padding: 0 }}
+        >
+          <div style={{
+            padding: '20px 16px 12px',
+            borderBottom: '1px solid #f0f0f0',
+          }}>
+            <Title level={5} style={{ margin: 0, color: '#1890ff' }}>
+              OpenHub
+            </Title>
+            <Text type="secondary" style={{ fontSize: 11 }}>管理后台</Text>
+          </div>
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            onClick={({ key }) => {
+              setSelectedKey(key);
+              setDrawerVisible(false);
+            }}
+            items={menuItems}
+            style={{ border: 'none', marginTop: 8 }}
+          />
+          <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0' }}>
+            <Button
+              type="text"
+              icon={<HomeOutlined />}
+              onClick={() => navigate('/')}
+              block
+              style={{ textAlign: 'left', color: '#666' }}
+            >
+              返回首页
+            </Button>
+          </div>
+        </Drawer>
+      ) : (
+        <Sider
+          width={200}
+          style={{
+            background: '#fff',
+            borderRight: '1px solid #f0f0f0',
+            position: 'fixed',
+            height: '100vh',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            overflow: 'auto',
+          }}
+        >
+          <div style={{
+            padding: '20px 16px 12px',
+            borderBottom: '1px solid #f0f0f0',
+          }}>
+            <Title level={5} style={{ margin: 0, color: '#1890ff' }}>
+              OpenHub
+            </Title>
+            <Text type="secondary" style={{ fontSize: 11 }}>管理后台</Text>
+          </div>
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            onClick={({ key }) => setSelectedKey(key)}
+            items={menuItems}
+            style={{ border: 'none', marginTop: 8 }}
+          />
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            padding: '12px 16px',
+            borderTop: '1px solid #f0f0f0',
+          }}>
+            <Button
+              type="text"
+              icon={<HomeOutlined />}
+              onClick={() => navigate('/')}
+              block
+              style={{ textAlign: 'left', color: '#666' }}
+            >
+              返回首页
+            </Button>
+          </div>
+        </Sider>
+      )}
+
+      <Layout style={{ marginLeft: isMobile ? 0 : 200, background: '#f5f7fa' }}>
+        <Content style={{ padding: isMobile ? '16px' : '24px 32px', minHeight: '100vh' }}>
           <Breadcrumb
-            style={{ marginBottom: 16 }}
+            style={{ marginBottom: 16, marginTop: isMobile ? 48 : 0 }}
             items={[
               {
                 title: (
@@ -1062,7 +1475,7 @@ const AdminPage = () => {
               { title: '管理后台' },
             ]}
           />
-          <Card bodyStyle={selectedKey === 'users' ? { padding: 24 } : undefined}>
+          <Card bodyStyle={selectedKey === 'users' ? { padding: isMobile ? 12 : 24 } : undefined}>
             {renderContent()}
           </Card>
         </Content>

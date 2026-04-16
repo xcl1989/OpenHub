@@ -19,12 +19,16 @@
 | Feature | Description |
 |---------|-------------|
 | **Multi-user Management** | User CRUD, role-based admin, JWT authentication |
-| **Per-user Workspaces** | Isolated git repos with independent `.opencode/skills/` per user |
+| **Per-user Workspaces** | Isolated workspace directories with independent `.opencode/skills/` per user |
 | **Model Access Control** | Per-user model permissions with monthly usage limits |
 | **Provider Management** | Configure AI providers (API keys, default models) via admin UI |
 | **opencode Service Control** | Start/stop/restart opencode serve from the admin panel |
 | **Real-time Streaming** | SSE-based streaming responses with tool/reasoning display |
 | **Multi-modal Input** | Image upload and analysis in chat |
+| **File Browser** | Browse, preview, search, and download workspace files |
+| **Tool Permissions** | Per-user deny/ask/allow control for AI tools |
+| **Usage Statistics** | Visual charts and tables tracking usage by model and user |
+| **Mobile Responsive** | Full mobile-optimized UI with bottom sheets and touch-friendly controls |
 | **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, and more |
 
 ---
@@ -69,7 +73,7 @@
 ### Key Design Decisions
 
 - **Single opencode instance** on `:4096` shared by all users, with session-level `?directory=` parameter to isolate per-user workspaces
-- Each workspace is a git repo with its own `.opencode/skills/`, so different users can have different skill sets
+- Each workspace has its own `.opencode/skills/`, so different users can have different skill sets
 - `prompt_async` and `global/event` APIs pass `?directory=` to ensure opencode loads the correct project context
 - Backend auto-starts opencode serve on launch (configurable via admin panel)
 
@@ -90,7 +94,7 @@
 
 ```bash
 git clone <repo-url>
-cd dataanalysis
+cd OpenHub
 
 # Backend config
 cp smart-query-backend/.env.example smart-query-backend/.env
@@ -125,11 +129,6 @@ This creates all required tables (`users`, `conversation_sessions`, `conversatio
 ### 4. Start Services
 
 ```bash
-# Option A: One-click launcher
-cd smart-query && ./start-enhanced.sh
-
-# Option B: Manual startup
-
 # Terminal 1: Backend (auto-starts opencode serve)
 cd smart-query-backend
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -155,9 +154,24 @@ Default admin credentials: `admin` / `admin`
 ## Screenshots
 
 ### 💬 Chat Interface
-Streamlined chat experience with real-time AI responses, multi-modal input support, and intuitive conversation history.
+Streamlined chat experience with real-time AI responses, multi-modal input, conversation history, file browser, and skill manager.
 
 ![Chat Interface](pic/conversation.png)
+
+### 📁 File Management
+Browse, preview, search, and download files in your workspace. Supports text and image preview with full mobile responsiveness.
+
+![File Management](pic/filemanage.png)
+
+### 🛠️ Tool Permission Management
+Granular control over which tools each user can access — deny, ask, or allow per tool with easy toggle interface.
+
+![Tool Permission Management](pic/toolmanage.png)
+
+### 📊 Usage Statistics
+Track AI usage by model, user, and time period. Visualize token consumption and request counts with charts and sortable tables.
+
+![Usage Statistics](pic/usage.png)
 
 ### 👥 User Management
 Comprehensive user administration panel for creating, editing, and managing user accounts with role-based access control.
@@ -174,12 +188,17 @@ Opencode service control panel for managing the AI agent runtime, including auto
 
 ![Opencode Settings](pic/opencodesetting.png)
 
+### 🎯 User Skill Manager
+Enable or disable modular skills per user. Skills include PDF, Excel, Word, PPT, email, news, frontend design, data analytics, and more.
+
+![User Skill Manager](pic/userskillmanage.png)
+
 ---
 
 ## Project Structure
 
 ```
-dataanalysis/
+OpenHub/
 ├── .opencode/skills/              # Skill packages (template source)
 │   ├── data-analytics/            #   Data query & analysis
 │   ├── pdf/                       #   PDF processing
@@ -214,24 +233,32 @@ dataanalysis/
 │   ├── init_db.py                 #   Database initialization script
 │   └── requirements.txt
 │
-├── smart-query-frontend/          # React + Vite frontend
+ ├── smart-query-frontend/          # React + Vite frontend
 │   ├── src/
 │   │   ├── App.jsx                #   Router + layout
+│   │   ├── main.jsx               #   Entry point
 │   │   ├── pages/
 │   │   │   ├── LoginPage.jsx      #     Login form
-│   │   │   ├── SmartQueryPage.jsx #     Chat interface
+│   │   │   ├── SmartQueryPage.jsx #     Chat interface (main)
 │   │   │   └── AdminPage.jsx      #     Admin panel (users/models/opencode)
 │   │   ├── components/
-│   │   │   └── ChatInput.jsx      #     Chat input + model selector
+│   │   │   ├── ChatInput.jsx      #     Input + model selector + mobile bottom sheet
+│   │   │   ├── FileManager.jsx    #     File browser with preview/search/download
+│   │   │   ├── ToolPermissionManager.jsx #  Per-user tool deny/ask/allow
+│   │   │   ├── UsageStats.jsx     #     Usage charts + sortable tables
+│   │   │   ├── SkillManager.jsx   #     Admin skill management
+│   │   │   ├── UserSkillManager.jsx #   Per-user skill enable/disable
+│   │   │   ├── DiffViewer.jsx     #     File change viewer
+│   │   │   ├── HistoryDrawer.jsx  #     Conversation history
+│   │   │   ├── ToolCall.jsx       #     Tool invocation display
+│   │   │   ├── MessageBubble.jsx  #     Chat message bubble
+│   │   │   ├── MarkdownRenderer.jsx #   Markdown + code highlighting
+│   │   │   └── TableWithChart.jsx #     Recharts table component
 │   │   └── services/
-│   │       └── api.js             #     Axios API client
+│   │       └── api.js             #     Axios API client + service objects
 │   └── package.json
 │
-├── smart-query/                   # One-click launcher scripts
-│   ├── start.sh
-│   └── start-enhanced.sh
-│
-├── AGENTS.md                      # Developer guide for AI coding agents
+ ├── AGENTS.md                      # Developer guide for AI coding agents
 ├── README.md                      # This file (English)
 ├── README_CN.md                   # Chinese documentation
 ```
@@ -257,13 +284,31 @@ dataanalysis/
 | `/api/query/abort` | POST | Abort running query |
 | `/api/query/stream/reconnect` | GET | Reconnect to active SSE stream |
 
-### Session
+### Sessions
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/sessions` | GET | List sessions (paginated) |
 | `/api/sessions/{id}/messages` | GET | Get session messages |
 | `/api/session/archive` | POST | Archive a session |
+| `/api/images/{image_id}` | GET | Get uploaded image |
+
+### Files
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/files` | GET | List workspace files (with pagination) |
+| `/api/files/content` | GET | Get file content for preview |
+| `/api/files/search` | GET | Search files by name pattern |
+| `/api/files/download` | GET | Download a file |
+
+### Skills (User-facing)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/skills` | GET | List available skills |
+| `/api/skills/{skill_name}` | PUT | Enable/disable a skill |
+| `/api/skills/sync` | POST | Sync skills from workspace |
 
 ### Admin
 
@@ -273,15 +318,27 @@ dataanalysis/
 | `/api/admin/users` | POST | Create user (+ auto-init workspace) |
 | `/api/admin/users/{id}` | PUT | Update user |
 | `/api/admin/users/{id}` | DELETE | Delete user |
-| `/api/admin/users/{id}/models` | GET/PUT | Get/set user model permissions |
 | `/api/admin/users/{id}/init-workspace` | POST | Initialize user workspace |
+| `/api/admin/users/{id}/models` | GET/PUT | Get/set user model permissions |
+| `/api/admin/users/{id}/tools/{tool_name}` | PUT/DELETE | Set/delete per-user tool permission |
+| `/api/admin/users/{id}/skills/{skill_name}` | PUT/DELETE | Set/delete per-user skill |
 | `/api/admin/models` | GET | List available models |
-| `/api/admin/opencode/providers` | GET | List AI providers (filtered) |
+| `/api/admin/tools` | GET | List all tools |
+| `/api/admin/tools/{tool_name}` | PUT | Update tool config |
+| `/api/admin/tools/sync` | POST | Sync tools from workspace |
+| `/api/admin/skills` | GET | List all skills |
+| `/api/admin/skills/{skill_name}` | PUT | Update skill config |
+| `/api/admin/skills/sync` | POST | Sync skills from workspace |
+| `/api/admin/opencode/providers` | GET | List AI providers |
+| `/api/admin/opencode/provider-auth` | GET | Get provider auth info |
+| `/api/admin/opencode/auth/{provider_id}` | PUT | Update provider auth |
 | `/api/admin/opencode/config` | GET/PATCH | Get/set opencode configuration |
+| `/api/admin/opencode/config/providers` | GET | Get provider config |
 | `/api/admin/opencode/status` | GET | Check opencode serve status |
 | `/api/admin/opencode/start` | POST | Start opencode serve |
 | `/api/admin/opencode/restart` | POST | Restart opencode serve |
 | `/api/admin/system-config` | GET/PUT | System configuration (default models, etc.) |
+| `/api/admin/usage/stats` | GET | Get usage statistics |
 
 ---
 
@@ -324,7 +381,6 @@ Each user gets an isolated workspace at `smart-query-backend/workspace/{username
 
 ```
 workspace/{username}/
-├── .git/                 # Git repository (required by opencode for project isolation)
 ├── .opencode/
 │   └── skills/           # User's skill set (copied from template on creation)
 │       ├── pdf/
@@ -338,7 +394,7 @@ workspace/{username}/
 
 1. When a user sends a query, the backend creates an opencode session with `POST /session?directory={workspace_path}`
 2. The `prompt_async` and `global/event` APIs also receive `?directory=` to ensure opencode loads the correct project
-3. opencode identifies each workspace as a separate project (based on git repo), loading its own skills and config
+3. opencode identifies each workspace as a separate project via the directory path, loading its own skills and config
 4. Different users can have different skill sets by modifying their workspace's `.opencode/skills/`
 
 ---

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.opencode_client import opencode_client
 from app.services import opencode_launcher
-from app.api import auth, query, session, admin
+from app.api import auth, query, session, admin, files
 
 
 @asynccontextmanager
@@ -61,6 +61,7 @@ app.include_router(auth.router)
 app.include_router(query.router)
 app.include_router(session.router)
 app.include_router(admin.router)
+app.include_router(files.router)
 
 
 if __name__ == "__main__":

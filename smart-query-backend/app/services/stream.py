@@ -164,6 +164,7 @@ async def _background_collector(
     user_id: Optional[int] = None,
     workspace_path: Optional[str] = None,
 ):
+    start_time = time.time()
     log_dir = Path(__file__).parent.parent / "logs" / session_id
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"event_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -466,6 +467,19 @@ async def _background_collector(
                 log_file,
                 f"[INFO] Event stream ended at {datetime.now().isoformat()}\n"
                 f"[INFO] Total messages: {message_count}\n",
+            )
+
+        if user_id:
+            elapsed = int((time.time() - start_time) * 1000)
+            await asyncio.to_thread(
+                database.log_usage,
+                user_id=user_id,
+                session_id=session_id,
+                model_id=model.get("modelID") if model else None,
+                provider_id=model.get("providerID") if model else None,
+                agent=agent,
+                question_preview=question[:500] if question else None,
+                duration_ms=elapsed,
             )
 
     except asyncio.CancelledError:

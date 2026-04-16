@@ -113,3 +113,65 @@ async def archive_session(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/skills")
+async def get_user_skills(current_user: dict = Depends(get_current_user)):
+    """获取用户的技能列表（从用户工作空间同步）"""
+    from app.database import (
+        get_user_workspace,
+        sync_skills_from_workspace,
+        get_all_skills,
+        get_user_skill_permissions,
+    )
+
+    workspace = get_user_workspace(current_user.get("id"))
+    if not workspace or workspace == "__NONE__":
+        return {"success": False, "error": "工作空间未初始化"}
+
+    sync_skills_from_workspace(workspace)
+    skills = get_all_skills()
+    user_perms = {
+        s["skill_name"]: s for s in get_user_skill_permissions(current_user.get("id"))
+    }
+
+    result = []
+    for s in skills:
+        perm = user_perms.get(s["skill_name"], {})
+        result.append(
+            {
+                "skill_name": s["skill_name"],
+                "description": s.get("description", ""),
+                "globally_enabled": s.get("globally_enabled", 1),
+                "user_enabled": perm.get("user_action") == "allow"
+                if perm.get("has_override")
+                else None,
+                "has_override": perm.get("has_override", 0),
+            }
+        )
+    return {"success": True, "data": result}
+
+
+@router.put("/api/skills/{skill_name}")
+async def update_user_skill(
+    skill_name: str, enabled: bool, current_user: dict = Depends(get_current_user)
+):
+    """更新用户的技能启用状态"""
+    from app.database import set_user_skill_permission
+
+    action = "allow" if enabled else "deny"
+    set_user_skill_permission(current_user.get("id"), skill_name, action)
+    return {"success": True}
+
+
+@router.post("/api/skills/sync")
+async def sync_user_skills(current_user: dict = Depends(get_current_user)):
+    """从用户工作空间同步技能列表"""
+    from app.database import get_user_workspace, sync_skills_from_workspace
+
+    workspace = get_user_workspace(current_user.get("id"))
+    if not workspace or workspace == "__NONE__":
+        return {"success": False, "error": "工作空间未初始化"}
+
+    discovered = sync_skills_from_workspace(workspace)
+    return {"success": True, "message": f"已同步 {len(discovered)} 个技能"}

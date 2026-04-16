@@ -105,6 +105,62 @@ TABLES = {
             INDEX idx_key (config_key)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "usage_logs": """
+        CREATE TABLE IF NOT EXISTS usage_logs (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            session_id VARCHAR(128),
+            model_id VARCHAR(200),
+            provider_id VARCHAR(100),
+            agent VARCHAR(50) DEFAULT 'build',
+            question_preview VARCHAR(500),
+            duration_ms INT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_time (user_id, created_at),
+            INDEX idx_model_time (model_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    "tool_permissions": """
+        CREATE TABLE IF NOT EXISTS tool_permissions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            tool_name VARCHAR(100) NOT NULL,
+            risk_level ENUM('safe', 'moderate', 'dangerous') DEFAULT 'safe',
+            description VARCHAR(500),
+            global_action ENUM('deny', 'ask', 'allow') DEFAULT 'allow',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY idx_tool_name (tool_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    "user_tool_permissions": """
+        CREATE TABLE IF NOT EXISTS user_tool_permissions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            tool_name VARCHAR(100) NOT NULL,
+            action ENUM('deny', 'ask', 'allow') DEFAULT 'allow',
+            UNIQUE KEY idx_user_tool (user_id, tool_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    "skill_registry": """
+        CREATE TABLE IF NOT EXISTS skill_registry (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            skill_name VARCHAR(100) NOT NULL,
+            description VARCHAR(500),
+            globally_enabled TINYINT DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY idx_skill_name (skill_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    "user_skill_permissions": """
+        CREATE TABLE IF NOT EXISTS user_skill_permissions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            skill_name VARCHAR(100) NOT NULL,
+            action ENUM('deny', 'allow') DEFAULT 'allow',
+            UNIQUE KEY idx_user_skill (user_id, skill_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 }
 
 

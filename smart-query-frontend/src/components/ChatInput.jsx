@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Input, Button, Image, Typography, Tooltip, Segmented, Select, Space, Tag } from 'antd';
-import { LinkOutlined, SendOutlined, PlusOutlined, CloseOutlined, DownloadOutlined } from '@ant-design/icons';
+import { Input, Button, Image, Typography, Tooltip, Segmented, Select, Space, Tag, Drawer, Radio, List } from 'antd';
+import { LinkOutlined, SendOutlined, PlusOutlined, CloseOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
 import { queryDataService } from '../services/api';
 
 const { TextArea } = Input;
@@ -9,7 +9,19 @@ const { Text } = Typography;
 function ModelSelect({ model, setModel }) {
   const [groupedOptions, setGroupedOptions] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
   const modelsMapRef = useRef({});
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,9 +77,182 @@ function ModelSelect({ model, setModel }) {
         monthlyLimit: m.monthlyLimit,
       });
     }
+    setDrawerOpen(false);
+    setSearchText('');
+  };
+
+  const handleClear = () => {
+    setModel(null);
+    setDrawerOpen(false);
+    setSearchText('');
   };
 
   const selectValue = model ? (model.modelID || model) : undefined;
+
+  const allModels = [];
+  const groupMap = {};
+  for (const group of groupedOptions) {
+    if (!groupMap[group.label]) {
+      groupMap[group.label] = group.label;
+    }
+    for (const opt of group.options) {
+      allModels.push({
+        ...opt,
+        provider: group.label,
+        ...modelsMapRef.current[opt.value]
+      });
+    }
+  }
+
+  const filteredModels = searchText
+    ? allModels.filter(m =>
+        (m.label || '').toLowerCase().includes(searchText.toLowerCase()) ||
+        (m.provider || '').toLowerCase().includes(searchText.toLowerCase())
+      )
+    : allModels;
+
+  const groupedFiltered = {};
+  for (const m of filteredModels) {
+    if (!groupedFiltered[m.provider]) {
+      groupedFiltered[m.provider] = [];
+    }
+    groupedFiltered[m.provider].push(m);
+  }
+
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          size="small"
+          icon={<RobotOutlined />}
+          onClick={() => setDrawerOpen(true)}
+          style={{
+            fontSize: 12,
+            height: 28,
+            padding: '0 8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4
+          }}
+        >
+          {model ? (
+            <span style={{ maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {model.modelID}
+            </span>
+          ) : (
+            <span>选择模型</span>
+          )}
+        </Button>
+        <Drawer
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>选择模型</span>
+              {model && (
+                <Button type="text" size="small" onClick={handleClear} style={{ color: '#ff4d4f' }}>
+                  清除
+                </Button>
+              )}
+            </div>
+          }
+          placement="bottom"
+          onClose={() => { setDrawerOpen(false); setSearchText(''); }}
+          open={drawerOpen}
+          height="70vh"
+          styles={{
+            body: { padding: 0 },
+            header: { borderBottom: '1px solid #f0f0f0', marginBottom: 0 }
+          }}
+        >
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
+            <Input.Search
+              placeholder="搜索模型..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              allowClear
+              onClear={() => setSearchText('')}
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div style={{ overflow: 'auto', flex: 1, padding: '8px 0' }}>
+            {Object.entries(groupedFiltered).map(([provider, models]) => (
+              <div key={provider}>
+                <div style={{
+                  padding: '8px 16px',
+                  fontSize: 12,
+                  color: '#666',
+                  background: '#f5f5f5',
+                  fontWeight: 500
+                }}>
+                  {provider}
+                </div>
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column' }}>
+                  {models.map((m) => {
+                    const remaining = m.monthlyLimit ? m.monthlyLimit - (m.currentUsage || 0) : null;
+                    const isLimitReached = m.monthlyLimit && remaining <= 0;
+                    const isSelected = selectValue === m.value;
+                    const displayName = m.name || m.label || m.modelID || m.value;
+                    return (
+                      <div
+                        key={m.value}
+                        onClick={() => !isLimitReached && handleChange(m.value)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 12,
+                          padding: '14px 16px',
+                          cursor: isLimitReached ? 'not-allowed' : 'pointer',
+                          background: isSelected ? '#e6f7ff' : 'transparent',
+                          borderBottom: '1px solid #f0f0f0',
+                          opacity: isLimitReached ? 0.5 : 1
+                        }}
+                      >
+                        <Radio
+                          checked={isSelected}
+                          disabled={isLimitReached}
+                          style={{ marginTop: 2 }}
+                        />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{
+                              fontWeight: 500,
+                              color: isSelected ? '#1890ff' : '#333',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {displayName}
+                            </span>
+                            {isLimitReached && (
+                              <Tag color="red" style={{ fontSize: 10, margin: 0 }}>已达上限</Tag>
+                            )}
+                          </div>
+                          {remaining !== null && !isLimitReached && (
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              本月剩余: {remaining} / {m.monthlyLimit}
+                            </Text>
+                          )}
+                          {remaining === null && (
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              无使用限制
+                            </Text>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {filteredModels.length === 0 && (
+              <div style={{ padding: 40, textAlign: 'center', color: '#999' }}>
+                未找到匹配的模型
+              </div>
+            )}
+          </div>
+        </Drawer>
+      </>
+    );
+  }
 
   return (
     <Select
@@ -107,6 +292,17 @@ export default function ChatInput({
   messages,
   fileInputRef
 }) {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   return (
     <div className="input-area" style={{ 
       padding: '6px 12px',
@@ -245,8 +441,8 @@ export default function ChatInput({
           placeholder="输入您的问题，按 Enter 发送..."
           autoSize={{ minRows: 2, maxRows: 5 }}
           disabled={loading && !idleState}
-          style={{ 
-            fontSize: 13,
+          style={{
+            fontSize: isMobile ? 16 : 13,
             background: 'transparent',
             resize: 'none',
             flex: 1,
@@ -276,23 +472,29 @@ export default function ChatInput({
               background: '#ff4d4f',
               border: 'none',
               borderRadius: '8px',
-              padding: '0 20px',
-              height: 40,
+              padding: isMobile ? '0 10px' : '0 20px',
+              height: isMobile ? 36 : 40,
               fontWeight: 500,
               flexShrink: 0,
               display: 'flex',
               alignItems: 'center',
-              gap: 6
+              gap: isMobile ? 0 : 6
             }}
           >
-            <span style={{ display: 'inline-block', width: 14, height: 14, background: '#fff', borderRadius: 2 }} />
-            停止
+            {isMobile ? (
+              <span style={{ display: 'inline-block', width: 14, height: 14, background: '#fff', borderRadius: 2 }} />
+            ) : (
+              <>
+                <span style={{ display: 'inline-block', width: 14, height: 14, background: '#fff', borderRadius: 2 }} />
+                停止
+              </>
+            )}
           </Button>
         ) : (
           <Button
             type="primary"
             icon={<SendOutlined />}
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={(!question.trim() && selectedImages.length === 0) || (model?.monthlyLimit > 0 && (model?.currentUsage || 0) >= model?.monthlyLimit)}
             title={model?.monthlyLimit > 0 && (model?.currentUsage || 0) >= model?.monthlyLimit ? '模型调用次数已达上限，请更换模型或联系管理员' : ''}
             size="large"
@@ -300,27 +502,29 @@ export default function ChatInput({
               background: '#1890ff',
               border: 'none',
               borderRadius: '8px',
-              padding: '0 20px',
-              height: 40,
+              padding: isMobile ? '0 10px' : '0 20px',
+              height: isMobile ? 36 : 40,
               fontWeight: 500,
               flexShrink: 0
             }}
           >
-            发送
+            {isMobile ? null : '发送'}
           </Button>
         )}
       </div>
-      <div style={{ 
-        marginTop: 10, 
-        display: 'flex', 
+      <div style={{
+        marginTop: 10,
+        display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: 6
       }}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          支持多轮对话，AI 会自动理解上下文
-        </Text>
+        {!isMobile && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            支持多轮对话，AI 会自动理解上下文
+          </Text>
+        )}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {messages.length > 0 && (
             <Tooltip title="导出对话为 PDF 文档" placement="top">

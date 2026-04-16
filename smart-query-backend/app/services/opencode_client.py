@@ -28,28 +28,44 @@ class OpenCodeClient:
             await self._client.aclose()
             self._client = None
 
-    async def get(self, path: str, **kwargs) -> httpx.Response:
+    async def get(self, path: str, directory: str = None, **kwargs) -> httpx.Response:
         client = await self.get_client()
         url = f"{config.OPENCODE_BASE_URL}{path}"
         kwargs.setdefault("auth", self._get_auth())
+        if directory:
+            params = kwargs.pop("params", {}) or {}
+            params["directory"] = directory
+            kwargs["params"] = params
         return await client.get(url, **kwargs)
 
-    async def post(self, path: str, **kwargs) -> httpx.Response:
+    async def post(self, path: str, directory: str = None, **kwargs) -> httpx.Response:
         client = await self.get_client()
         url = f"{config.OPENCODE_BASE_URL}{path}"
         kwargs.setdefault("auth", self._get_auth())
+        if directory:
+            params = kwargs.pop("params", {}) or {}
+            params["directory"] = directory
+            kwargs["params"] = params
         return await client.post(url, **kwargs)
 
-    async def put(self, path: str, **kwargs) -> httpx.Response:
+    async def put(self, path: str, directory: str = None, **kwargs) -> httpx.Response:
         client = await self.get_client()
         url = f"{config.OPENCODE_BASE_URL}{path}"
         kwargs.setdefault("auth", self._get_auth())
+        if directory:
+            params = kwargs.pop("params", {}) or {}
+            params["directory"] = directory
+            kwargs["params"] = params
         return await client.put(url, **kwargs)
 
-    async def patch(self, path: str, **kwargs) -> httpx.Response:
+    async def patch(self, path: str, directory: str = None, **kwargs) -> httpx.Response:
         client = await self.get_client()
         url = f"{config.OPENCODE_BASE_URL}{path}"
         kwargs.setdefault("auth", self._get_auth())
+        if directory:
+            params = kwargs.pop("params", {}) or {}
+            params["directory"] = directory
+            kwargs["params"] = params
         return await client.patch(url, **kwargs)
 
     async def get_client_for_stream(self) -> httpx.AsyncClient:
