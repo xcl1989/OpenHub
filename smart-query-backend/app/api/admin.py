@@ -517,6 +517,24 @@ async def admin_get_system_config(admin: dict = Depends(get_admin_user)):
                     "modelID": parts[1],
                 }
 
+        fallback_raw = get_system_config("global_fallback_model")
+        if fallback_raw:
+            parts = fallback_raw.split("|", 1)
+            if len(parts) == 2:
+                result["global_fallback_model"] = {
+                    "providerID": parts[0],
+                    "modelID": parts[1],
+                }
+
+        task_model_raw = get_system_config("default_task_model")
+        if task_model_raw:
+            parts = task_model_raw.split("|", 1)
+            if len(parts) == 2:
+                result["default_task_model"] = {
+                    "providerID": parts[0],
+                    "modelID": parts[1],
+                }
+
         return {"success": True, "data": result}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -579,7 +597,15 @@ async def admin_get_usage_stats(
 async def admin_restart_opencode(admin: dict = Depends(get_admin_user)):
     """重启 opencode 服务"""
     try:
+        was_running = opencode_launcher.is_opencode_running()
         opencode_launcher.stop_opencode()
+
+        if was_running:
+            import time
+
+            start = time.time()
+            while opencode_launcher.is_opencode_running() and time.time() - start < 10:
+                time.sleep(0.5)
 
         workdir = (
             get_system_config("opencode_workdir")
@@ -591,7 +617,7 @@ async def admin_restart_opencode(admin: dict = Depends(get_admin_user)):
         proc = await opencode_launcher.start_opencode(workdir, username, password)
         if proc or opencode_launcher.is_opencode_running():
             return {"success": True, "message": "opencode 已重启"}
-        return {"success": False, "error": "opencode 启动失败，请检查配置"}
+        return {"success": False, "error": "opencode 启动失败，请检查日志"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -744,3 +770,47 @@ async def admin_sync_skills(admin: dict = Depends(get_admin_user)):
 
     discovered = sync_skills_from_workspace(workdir)
     return {"success": True, "message": f"已同步 {len(discovered)} 个技能"}
+
+
+# ========== 模型 Failover Chain 管理 API ==========
+
+
+class FailoverChainRequest(BaseModel):
+    primary_model_id: str
+    primary_provider_id: str
+    fallbacks: list[dict]
+
+
+@router.get("/failover-chains")
+async def admin_get_failover_chains(admin: dict = Depends(get_admin_user)):
+    from app.database import get_all_failover_chains
+
+    return {"success": True, "data": get_all_failover_chains()}
+
+
+@router.put("/failover-chains")
+async def admin_set_failover_chain(
+    request: FailoverChainRequest, admin: dict = Depends(get_admin_user)
+):
+    from app.database import set_failover_chain
+
+    ok = set_failover_chain(
+        request.primary_model_id,
+        request.primary_provider_id,
+        request.fallbacks,
+    )
+    if ok:
+        return {"success": True, "message": "兜底链已保存"}
+    return {"success": False, "error": "保存失败"}
+
+
+@router.delete("/failover-chains/{chain_id}")
+async def admin_delete_failover_chain(
+    chain_id: int, admin: dict = Depends(get_admin_user)
+):
+    from app.database import delete_failover_chain
+
+    ok = delete_failover_chain(chain_id)
+    if ok:
+        return {"success": True, "message": "已删除"}
+    return {"success": False, "error": "删除失败"}

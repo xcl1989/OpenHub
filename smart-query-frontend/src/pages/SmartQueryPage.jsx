@@ -1208,9 +1208,17 @@ const SmartQueryPage = () => {
           }
           
           if (data.type === 'question.asked') {
-            // 简单处理：将 questionId 暂存到 ref，等待 tool 事件来使用
             pendingQuestionIdRef.current = data.id;
             console.log('[question.asked] questionId:', data.id);
+          }
+
+          if (data.type === 'model_failover') {
+            const orig = data.original_model?.modelID || '';
+            const fb = data.fallback_model?.modelID || '';
+            AntMessage.info({ content: `模型 ${orig} 不可用，已切换至 ${fb}`, duration: 5 });
+            if (data.fallback_model) {
+              setCurrentModel(prev => ({ ...prev, modelID: fb, providerID: data.fallback_model.providerID }));
+            }
           }
         },
         (finalConversationId) => {

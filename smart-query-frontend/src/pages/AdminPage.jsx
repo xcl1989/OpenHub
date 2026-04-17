@@ -815,6 +815,133 @@ function UserManagement() {
   );
 }
 
+function FailoverConfigSection({
+  providers,
+  failoverChains,
+  globalFallback,
+  buildModelOptions,
+  saving,
+  onSaveGlobalFallback,
+  onAddFallback,
+  onDeleteFallback,
+}) {
+  const [addPrimaryValue, setAddPrimaryValue] = useState('');
+  const [addFallbackValue, setAddFallbackValue] = useState('');
+
+  const grouped = {};
+  for (const c of failoverChains) {
+    const key = `${c.primary_provider_id}|${c.primary_model_id}`;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(c);
+  }
+
+  const handleSaveGlobal = (val) => {
+    onSaveGlobalFallback(val);
+  };
+
+  return (
+    <Card
+      size="small"
+      title="模型兜底配置"
+      style={{ marginTop: 16 }}
+      extra={<Tag>{failoverChains.length} 条规则</Tag>}
+    >
+      <div style={{ marginBottom: 16 }}>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+          全局兜底模型（所有 chain 失败后的最终后备）
+        </Text>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Select
+            placeholder="选择全局兜底模型"
+            value={globalFallback ? `${globalFallback.providerID}|${globalFallback.modelID}` : undefined}
+            onChange={handleSaveGlobal}
+            options={buildModelOptions.map(o => ({ value: o.value, label: o.label }))}
+            style={{ width: 360 }}
+            size="small"
+            allowClear
+            loading={saving}
+          />
+          {globalFallback && (
+            <Tag color="blue">{globalFallback.modelID}</Tag>
+          )}
+        </div>
+      </div>
+
+      {Object.keys(grouped).length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+            已配置的兜底链（按优先级排列）
+          </Text>
+          {Object.entries(grouped).map(([key, chains]) => (
+            <Card key={key} size="small" style={{ marginBottom: 8, background: '#fafafa' }}>
+              <Text strong style={{ fontSize: 13 }}>
+                {key.split('|')[1]}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 11 }}> ({key.split('|')[0]})</Text>
+              <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {chains.sort((a, b) => a.priority - b.priority).map((c, idx) => (
+                  <Tag
+                    key={c.id}
+                    closable
+                    onClose={(e) => { e.preventDefault(); onDeleteFallback(c.id); }}
+                    style={{ margin: 0 }}
+                    color="processing"
+                  >
+                    {idx + 1}. {c.fallback_model_id}
+                    <Text type="secondary" style={{ fontSize: 10 }}> ({c.fallback_provider_id})</Text>
+                  </Tag>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+          添加兜底规则
+        </Text>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Select
+            placeholder="主模型"
+            value={addPrimaryValue || undefined}
+            onChange={setAddPrimaryValue}
+            options={buildModelOptions.map(o => ({ value: o.value, label: o.label }))}
+            style={{ width: 220 }}
+            size="small"
+            showSearch
+            optionFilterProp="label"
+          />
+          <span style={{ color: '#999' }}>→</span>
+          <Select
+            placeholder="兜底模型"
+            value={addFallbackValue || undefined}
+            onChange={setAddFallbackValue}
+            options={buildModelOptions.map(o => ({ value: o.value, label: o.label }))}
+            style={{ width: 220 }}
+            size="small"
+            showSearch
+            optionFilterProp="label"
+          />
+          <Button
+            type="primary"
+            size="small"
+            loading={saving}
+            disabled={!addPrimaryValue || !addFallbackValue || addPrimaryValue === addFallbackValue}
+            onClick={() => {
+              onAddFallback(addPrimaryValue, addFallbackValue);
+              setAddPrimaryValue('');
+              setAddFallbackValue('');
+            }}
+          >
+            添加
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function ModelConfiguration() {
   const [providers, setProviders] = useState([]);
   const [providerAuth, setProviderAuth] = useState({});
@@ -824,7 +951,11 @@ function ModelConfiguration() {
   const [apiKeys, setApiKeys] = useState({});
   const [defaultModelBuild, setDefaultModelBuild] = useState(null);
   const [defaultModelPlan, setDefaultModelPlan] = useState(null);
+  const [defaultModelTask, setDefaultModelTask] = useState(null);
   const [providerSearchText, setProviderSearchText] = useState('');
+  const [failoverChains, setFailoverChains] = useState([]);
+  const [globalFallback, setGlobalFallback] = useState(null);
+  const [savingFailover, setSavingFailover] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -834,6 +965,8 @@ function ModelConfiguration() {
         adminService.getOpencodeProviderAuth(),
         adminService.getSystemConfig(),
       ]);
+
+      const chainsRes = await adminService.getFailoverChains();
 
       if (providersRes.success) {
         const data = providersRes.data;
@@ -853,6 +986,17 @@ function ModelConfiguration() {
         const sc = sysConfigRes.data || {};
         setDefaultModelBuild(sc.default_build_model || null);
         setDefaultModelPlan(sc.default_plan_model || null);
+        setDefaultModelTask(sc.default_task_model || null);
+      }
+
+      if (chainsRes.success) {
+        setFailoverChains(chainsRes.data || []);
+      }
+      const gfRaw = sysConfigRes.success ? (sysConfigRes.data || {})['global_fallback_model'] : null;
+      if (gfRaw) {
+        setGlobalFallback(gfRaw);
+      } else {
+        setGlobalFallback(null);
       }
     } catch (err) {
       message.error('加载服务商数据失败');
@@ -887,16 +1031,16 @@ function ModelConfiguration() {
     const key = `${providerID}|${modelID}|${agent}`;
     setSavingDefaultKey(key);
     try {
-      const configKey = agent === 'build' ? 'default_build_model' : 'default_plan_model';
+      const configKeyMap = { build: 'default_build_model', plan: 'default_plan_model', task: 'default_task_model' };
+      const configKey = configKeyMap[agent] || 'default_build_model';
       const configValue = `${providerID}|${modelID}`;
-      if (agent === 'build') {
-        setDefaultModelBuild({ providerID, modelID });
-      } else {
-        setDefaultModelPlan({ providerID, modelID });
-      }
+      if (agent === 'build') setDefaultModelBuild({ providerID, modelID });
+      else if (agent === 'plan') setDefaultModelPlan({ providerID, modelID });
+      else if (agent === 'task') setDefaultModelTask({ providerID, modelID });
       const result = await adminService.setSystemConfig(configKey, configValue);
       if (result.success) {
-        message.success(`${agent === 'build' ? 'Build' : 'Plan'} 默认模型已更新`);
+        const labelMap = { build: 'Build', plan: 'Plan', task: '定时任务' };
+        message.success(`${labelMap[agent] || agent} 默认模型已更新`);
       } else {
         message.error(result.error || '设置失败');
         loadData();
@@ -912,12 +1056,15 @@ function ModelConfiguration() {
   const handleClearDefaultModel = async (agent) => {
     setSavingDefaultKey(agent);
     try {
-      const configKey = agent === 'build' ? 'default_build_model' : 'default_plan_model';
+      const configKeyMap = { build: 'default_build_model', plan: 'default_plan_model', task: 'default_task_model' };
+      const configKey = configKeyMap[agent] || 'default_build_model';
       const result = await adminService.setSystemConfig(configKey, '');
       if (result.success) {
         if (agent === 'build') setDefaultModelBuild(null);
-        else setDefaultModelPlan(null);
-        message.success(`${agent === 'build' ? 'Build' : 'Plan'} 默认模型已清除`);
+        else if (agent === 'plan') setDefaultModelPlan(null);
+        else if (agent === 'task') setDefaultModelTask(null);
+        const labelMap = { build: 'Build', plan: 'Plan', task: '定时任务' };
+        message.success(`${labelMap[agent] || agent} 默认模型已清除`);
       } else {
         message.error(result.error || '清除失败');
       }
@@ -933,6 +1080,69 @@ function ModelConfiguration() {
 
   const isDefaultPlan = (providerID, modelID) =>
     defaultModelPlan?.providerID === providerID && defaultModelPlan?.modelID === modelID;
+
+  const isDefaultTask = (providerID, modelID) =>
+    defaultModelTask?.providerID === providerID && defaultModelTask?.modelID === modelID;
+
+  const handleSaveGlobalFallback = async (value) => {
+    setSavingFailover(true);
+    try {
+      const result = await adminService.setSystemConfig('global_fallback_model', value || '');
+      if (result.success) {
+        setGlobalFallback(value ? { providerID: value.split('|')[0], modelID: value.split('|')[1] } : null);
+        message.success('全局兜底模型已保存');
+      } else {
+        message.error(result.error || '保存失败');
+      }
+    } catch (err) {
+      message.error('保存失败');
+    } finally {
+      setSavingFailover(false);
+    }
+  };
+
+  const handleAddFallback = async (primaryValue, fallbackValue) => {
+    if (!primaryValue || !fallbackValue) return;
+    const [ppid, pmid] = primaryValue.split('|');
+    const [fpid, fmid] = fallbackValue.split('|');
+    setSavingFailover(true);
+    try {
+      const existing = failoverChains
+        .filter(c => c.primary_model_id === pmid && c.primary_provider_id === ppid)
+        .sort((a, b) => a.priority - b.priority);
+      const fallbacks = existing.map(c => ({ modelID: c.fallback_model_id, providerID: c.fallback_provider_id }));
+      fallbacks.push({ modelID: fmid, providerID: fpid });
+      const result = await adminService.setFailoverChain(pmid, ppid, fallbacks);
+      if (result.success) {
+        message.success('兜底模型已添加');
+        const chainsRes = await adminService.getFailoverChains();
+        if (chainsRes.success) setFailoverChains(chainsRes.data || []);
+      } else {
+        message.error(result.error || '添加失败');
+      }
+    } catch (err) {
+      message.error('添加失败');
+    } finally {
+      setSavingFailover(false);
+    }
+  };
+
+  const handleDeleteFallback = async (chainId) => {
+    setSavingFailover(true);
+    try {
+      const result = await adminService.deleteFailoverChain(chainId);
+      if (result.success) {
+        message.success('已删除');
+        setFailoverChains(prev => prev.filter(c => c.id !== chainId));
+      } else {
+        message.error(result.error || '删除失败');
+      }
+    } catch (err) {
+      message.error('删除失败');
+    } finally {
+      setSavingFailover(false);
+    }
+  };
 
   const filteredProviders = providerSearchText
     ? providers.filter(p => (p.name || p.id).toLowerCase().includes(providerSearchText.toLowerCase()))
@@ -1011,13 +1221,15 @@ function ModelConfiguration() {
                 {modelList.map(m => {
                   const isBuild = isDefaultBuild(p.id, m.id);
                   const isPlan = isDefaultPlan(p.id, m.id);
+                  const isTask = isDefaultTask(p.id, m.id);
+                  const isAny = isBuild || isPlan || isTask;
                   return (
                     <div key={m.id} style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
-                      background: isBuild || isPlan ? '#e6f7ff' : undefined,
-                      border: isBuild || isPlan ? '1px solid #91d5ff' : '1px solid transparent',
+                      background: isAny ? '#e6f7ff' : undefined,
+                      border: isAny ? '1px solid #91d5ff' : '1px solid transparent',
                       borderRadius: 6,
                       padding: '2px 6px',
                     }}>
@@ -1025,9 +1237,9 @@ function ModelConfiguration() {
                         style={{
                           fontSize: 12,
                           margin: 0,
-                          background: isBuild ? '#1890ff' : isPlan ? '#722ed1' : undefined,
-                          borderColor: isBuild ? '#1890ff' : isPlan ? '#722ed1' : undefined,
-                          color: (isBuild || isPlan) ? '#fff' : undefined,
+                          background: isBuild ? '#1890ff' : isPlan ? '#722ed1' : isTask ? '#fa8c16' : undefined,
+                          borderColor: isBuild ? '#1890ff' : isPlan ? '#722ed1' : isTask ? '#fa8c16' : undefined,
+                          color: isAny ? '#fff' : undefined,
                         }}
                       >
                         {m.name}
@@ -1062,6 +1274,21 @@ function ModelConfiguration() {
                           }}
                         >
                           📋{isPlan ? '★' : ''}
+                        </Button>
+                        <Button
+                          type="text"
+                          size="small"
+                          loading={savingDefaultKey === `${p.id}|${m.id}|task`}
+                          onClick={() => isTask ? handleClearDefaultModel('task') : handleSetDefaultModel(p.id, m.id, 'task')}
+                          title="设为定时任务默认"
+                          style={{
+                            color: isTask ? '#fa8c16' : '#bfbfbf',
+                            padding: '0 2px',
+                            height: 20,
+                            minWidth: 20,
+                          }}
+                        >
+                          ⏰{isTask ? '★' : ''}
                         </Button>
                       </Space>
                     </div>
@@ -1118,7 +1345,7 @@ function ModelConfiguration() {
             )}
           </Card>
 
-          {(defaultModelBuild || defaultModelPlan) && (
+          {(defaultModelBuild || defaultModelPlan || defaultModelTask) && (
             <Card size="small" style={{ background: '#fafafa' }}>
               <Space size="large" wrap>
                 {defaultModelBuild && (
@@ -1133,9 +1360,26 @@ function ModelConfiguration() {
                     <Text type="secondary">（{defaultModelPlan.providerID}）</Text>
                   </Text>
                 )}
+                {defaultModelTask && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    ⏰ 定时任务默认：<Text strong>{defaultModelTask.modelID}</Text>
+                    <Text type="secondary">（{defaultModelTask.providerID}）</Text>
+                  </Text>
+                )}
               </Space>
             </Card>
           )}
+
+          <FailoverConfigSection
+            providers={filteredProviders}
+            failoverChains={failoverChains}
+            globalFallback={globalFallback}
+            buildModelOptions={buildModelOptions}
+            saving={savingFailover}
+            onSaveGlobalFallback={handleSaveGlobalFallback}
+            onAddFallback={handleAddFallback}
+            onDeleteFallback={handleDeleteFallback}
+          />
         </>
       )}
     </div>

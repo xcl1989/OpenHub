@@ -10,6 +10,7 @@ import time
 from app.config import config
 from app import database
 from app.services.opencode_client import opencode_client
+from app.services.model_failover import try_prompt_with_failover
 from app.models.query import ImageData
 
 logger = logging.getLogger(__name__)
@@ -254,25 +255,29 @@ async def _background_collector(
                         }
                     )
 
-            prompt_response = await client.post(
-                f"{config.OPENCODE_BASE_URL}/session/{session_id}/prompt_async",
-                params={"directory": workspace_path} if workspace_path else None,
-                auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
-                json={
-                    "agent": agent,
-                    "model": model_config,
-                    "parts": parts,
-                },
-                timeout=10.0,
+            prompt_response, actual_model = await try_prompt_with_failover(
+                client,
+                session_id,
+                workspace_path,
+                agent,
+                parts,
+                model_config,
+                user_id,
+                queue,
+                log_file,
             )
 
-            if prompt_response.status_code not in [200, 204]:
-                error_msg = f"提交失败：{prompt_response.status_code}"
+            if prompt_response is None:
+                error_msg = "所有模型均不可用，请稍后重试"
                 await asyncio.to_thread(_write_log, log_file, f"[ERROR] {error_msg}\n")
                 await queue.put(
                     f"data: {json.dumps({'error': error_msg, 'type': 'error'})}\n\n"
                 )
                 return
+
+            if actual_model != model_config:
+                model_config = actual_model
+                model_str = json.dumps(model_config)
 
             await queue.put(
                 f"data: {json.dumps({'conversation_id': session_id, 'type': 'session', 'agent': agent, 'done': False})}\n\n"
@@ -475,8 +480,8 @@ async def _background_collector(
                 database.log_usage,
                 user_id=user_id,
                 session_id=session_id,
-                model_id=model.get("modelID") if model else None,
-                provider_id=model.get("providerID") if model else None,
+                model_id=model_config.get("modelID") if model_config else None,
+                provider_id=model_config.get("providerID") if model_config else None,
                 agent=agent,
                 question_preview=question[:500] if question else None,
                 duration_ms=elapsed,

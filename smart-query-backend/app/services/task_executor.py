@@ -1,11 +1,15 @@
 import asyncio
 import json
 import time
+import logging
 
 from app import database
 from app.config import config
 from app.services.opencode_client import opencode_client
 from app.services import notif_stream
+from app.services.model_failover import build_failover_chain
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = config.OPENCODE_BASE_URL
 
@@ -48,6 +52,16 @@ async def execute_task(task_id: int):
                 model_str = json.dumps({"modelID": task["model_id"]})
                 model_dict = {"modelID": task["model_id"]}
 
+        if not model_dict:
+            raw = await asyncio.to_thread(
+                database.get_system_config, "default_task_model"
+            )
+            if raw:
+                parts = raw.split("|", 1)
+                if len(parts) == 2:
+                    model_dict = {"providerID": parts[0], "modelID": parts[1]}
+                    model_str = raw
+
         prompt_text = (
             f"这是一个用户设置的定时任务，现在到了执行时间。\n"
             f"任务名称：{task['name']}\n"
@@ -75,13 +89,46 @@ async def execute_task(task_id: int):
         if model_dict:
             prompt_body["model"] = model_dict
 
+        actual_model = model_dict
+        prompt_params = {"directory": workspace}
+
+        raw_client = await opencode_client.get_client()
+        auth = opencode_client._get_auth()
+
+        primary_model = model_dict or {"modelID": "", "providerID": ""}
+        chain = await build_failover_chain(primary_model)
+
+        prompt_sent = False
+        for attempt, try_model in enumerate(chain):
+            body = {**prompt_body}
+            if try_model.get("modelID"):
+                body["model"] = try_model
+            resp = await raw_client.post(
+                f"{BASE_URL}/session/{session_id}/prompt_async",
+                params=prompt_params,
+                auth=auth,
+                json=body,
+                timeout=10,
+            )
+            if resp.status_code in [200, 204]:
+                if attempt > 0:
+                    logger.info(
+                        "[TaskExecutor] Failover: %s -> %s",
+                        primary_model.get("modelID"),
+                        try_model["modelID"],
+                    )
+                actual_model = try_model
+                model_str = json.dumps(try_model)
+                prompt_sent = True
+                break
+
+        if not prompt_sent:
+            raise RuntimeError("所有模型均不可用")
+
         message_contents: dict[str, str] = {}
         reasoning_part_ids: set[str] = set()
         last_message_id = None
         saved_texts: list[str] = []
-
-        raw_client = await opencode_client.get_client()
-        auth = opencode_client._get_auth()
 
         async with raw_client.stream(
             "GET",
@@ -90,13 +137,6 @@ async def execute_task(task_id: int):
             auth=auth,
             timeout=120,
         ) as event_resp:
-            await opencode_client.post(
-                f"/session/{session_id}/prompt_async",
-                directory=workspace,
-                json=prompt_body,
-                timeout=10,
-            )
-
             async for line in event_resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
@@ -199,8 +239,8 @@ async def execute_task(task_id: int):
             database.log_usage,
             task["user_id"],
             session_id,
-            model_dict.get("modelID") if model_dict else None,
-            model_dict.get("providerID") if model_dict else None,
+            actual_model.get("modelID") if actual_model else None,
+            actual_model.get("providerID") if actual_model else None,
             task.get("agent", "build"),
             task["question"][:500],
             duration,

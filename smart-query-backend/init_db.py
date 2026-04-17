@@ -209,6 +209,22 @@ TABLES = {
             INDEX idx_user_read (user_id, is_read)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "model_failover_chains": """
+        CREATE TABLE IF NOT EXISTS model_failover_chains (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            primary_model_id VARCHAR(200) NOT NULL,
+            primary_provider_id VARCHAR(100) NOT NULL,
+            fallback_model_id VARCHAR(200) NOT NULL,
+            fallback_provider_id VARCHAR(100) NOT NULL,
+            priority INT DEFAULT 1,
+            enabled TINYINT DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY idx_primary_fallback (primary_model_id, primary_provider_id,
+                                              fallback_model_id, fallback_provider_id),
+            INDEX idx_primary (primary_model_id, primary_provider_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 

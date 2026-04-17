@@ -5,6 +5,7 @@ import time
 import httpx
 import os
 import shutil
+import signal
 from typing import Optional
 
 _opencode_process: Optional[subprocess.Popen] = None
@@ -32,6 +33,22 @@ def _check_port_open(port: int = 4096) -> bool:
         return True
     except Exception:
         return False
+
+
+def _find_opencode_listener_pid(port: int = 4096) -> Optional[int]:
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"TCP:*:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split("\n")
+            return int(pids[0])
+    except Exception:
+        pass
+    return None
 
 
 def is_opencode_running() -> bool:
@@ -84,18 +101,45 @@ async def start_opencode(
 
 def stop_opencode() -> bool:
     global _opencode_process
-    if _opencode_process is None:
-        return False
-    try:
-        _opencode_process.terminate()
-        _opencode_process.wait(timeout=5)
-        _opencode_process = None
-        return True
-    except Exception:
+
+    if _opencode_process is not None:
         try:
-            _opencode_process.kill()
+            _opencode_process.terminate()
+            try:
+                _opencode_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _opencode_process.kill()
+                _opencode_process.wait(timeout=5)
+            _opencode_process = None
+            if not is_opencode_running():
+                return True
+        except Exception:
+            pass
+
+    pid = _find_opencode_listener_pid(4096)
+    if pid is None:
+        return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        _opencode_process = None
+        return False
+    except Exception:
+        _opencode_process = None
+        return False
+
+    for _ in range(10):
+        time.sleep(0.5)
+        if _find_opencode_listener_pid(4096) is None:
             _opencode_process = None
             return True
-        except Exception:
-            _opencode_process = None
-            return False
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(1)
+    except Exception:
+        pass
+
+    _opencode_process = None
+    return not is_opencode_running()

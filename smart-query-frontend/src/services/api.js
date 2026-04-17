@@ -512,6 +512,22 @@ export const adminService = {
     const response = await apiClient.post('/admin/skills/sync');
     return response.data;
   },
+  getFailoverChains: async () => {
+    const response = await apiClient.get('/admin/failover-chains');
+    return response.data;
+  },
+  setFailoverChain: async (primaryModelId, primaryProviderId, fallbacks) => {
+    const response = await apiClient.put('/admin/failover-chains', {
+      primary_model_id: primaryModelId,
+      primary_provider_id: primaryProviderId,
+      fallbacks,
+    });
+    return response.data;
+  },
+  deleteFailoverChain: async (chainId) => {
+    const response = await apiClient.delete(`/admin/failover-chains/${chainId}`);
+    return response.data;
+  },
 };
 
 export const fileService = {

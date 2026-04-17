@@ -53,7 +53,11 @@ async def root():
 async def get_models(current_user: dict = Depends(get_current_user)):
     """获取当前用户可用的模型列表"""
     try:
-        from app.database import get_user_model_permissions, check_and_increment_usage
+        from app.database import (
+            get_user_model_permissions,
+            check_and_increment_usage,
+            get_system_config,
+        )
 
         permissions = get_user_model_permissions(current_user.get("id"))
         enabled_model_ids = {p["model_id"] for p in permissions}
@@ -97,25 +101,54 @@ async def get_models(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
-        default_model = None
-        for m in models:
-            if m["modelID"] == "MiniMax-M2.7":
-                default_model = {
-                    "modelID": m["modelID"],
-                    "providerID": m["providerID"],
-                    "currentUsage": m.get("currentUsage", 0),
-                    "monthlyLimit": m.get("monthlyLimit", 0),
-                }
-                break
-        if not default_model and models:
-            default_model = {
+        default_build = None
+        build_raw = get_system_config("default_build_model")
+        if build_raw:
+            parts = build_raw.split("|", 1)
+            if len(parts) == 2:
+                for m in models:
+                    if m["modelID"] == parts[1] and m["providerID"] == parts[0]:
+                        default_build = {
+                            "modelID": m["modelID"],
+                            "providerID": m["providerID"],
+                            "currentUsage": m.get("currentUsage", 0),
+                            "monthlyLimit": m.get("monthlyLimit", 0),
+                        }
+                        break
+        if not default_build and models:
+            default_build = {
                 "modelID": models[0]["modelID"],
                 "providerID": models[0]["providerID"],
                 "currentUsage": models[0].get("currentUsage", 0),
                 "monthlyLimit": models[0].get("monthlyLimit", 0),
             }
 
-        return {"success": True, "data": {"models": models, "default": default_model}}
+        default_plan = None
+        plan_raw = get_system_config("default_plan_model")
+        if plan_raw:
+            parts = plan_raw.split("|", 1)
+            if len(parts) == 2:
+                for m in models:
+                    if m["modelID"] == parts[1] and m["providerID"] == parts[0]:
+                        default_plan = {
+                            "modelID": m["modelID"],
+                            "providerID": m["providerID"],
+                            "currentUsage": m.get("currentUsage", 0),
+                            "monthlyLimit": m.get("monthlyLimit", 0),
+                        }
+                        break
+        if not default_plan:
+            default_plan = default_build
+
+        return {
+            "success": True,
+            "data": {
+                "models": models,
+                "default": default_build,
+                "defaultBuild": default_build,
+                "defaultPlan": default_plan,
+            },
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

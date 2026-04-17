@@ -6,13 +6,14 @@ import { queryDataService } from '../services/api';
 const { TextArea } = Input;
 const { Text } = Typography;
 
-function ModelSelect({ model, setModel }) {
+function ModelSelect({ model, setModel, agent }) {
   const [groupedOptions, setGroupedOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const modelsMapRef = useRef({});
+  const defaultsRef = useRef({ build: null, plan: null });
 
   useEffect(() => {
     const checkMobile = () => {
@@ -31,7 +32,9 @@ function ModelSelect({ model, setModel }) {
         if (cancelled) return;
         const result = res.data || res;
         const models = result.models || [];
-        const defaultModel = result.default || null;
+        const defaultBuild = result.defaultBuild || result.default || null;
+        const defaultPlan = result.defaultPlan || result.default || null;
+        const defaultModel = agent === 'plan' ? defaultPlan : defaultBuild;
         const groups = {};
         const map = {};
         for (const m of models) {
@@ -49,6 +52,7 @@ function ModelSelect({ model, setModel }) {
           });
         }
         modelsMapRef.current = map;
+        defaultsRef.current = { build: defaultBuild, plan: defaultPlan || defaultBuild };
         setGroupedOptions(Object.values(groups));
         if (defaultModel && !model) {
           setModel(defaultModel);
@@ -62,6 +66,12 @@ function ModelSelect({ model, setModel }) {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!model && defaultsRef.current[agent]) {
+      setModel(defaultsRef.current[agent]);
+    }
+  }, [agent]);
 
   const handleChange = (modelID) => {
     if (!modelID) {
@@ -382,7 +392,7 @@ export default function ChatInput({
           ]}
           style={{ fontSize: 12, flexShrink: 0 }}
         />
-        <ModelSelect model={model} setModel={setModel} />
+        <ModelSelect model={model} setModel={setModel} agent={agent} />
         {model?.monthlyLimit !== undefined && (() => {
           const limit = model.monthlyLimit;
           const used = model.currentUsage || 0;

@@ -1471,3 +1471,87 @@ def mark_notification_read(notif_id: int) -> bool:
     except Exception as e:
         print(f"标记通知已读失败：{e}")
         return False
+
+
+def get_failover_chain(model_id: str, provider_id: str) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT fallback_model_id, fallback_provider_id "
+                    "FROM model_failover_chains "
+                    "WHERE primary_model_id = %s AND primary_provider_id = %s AND enabled = 1 "
+                    "ORDER BY priority ASC",
+                    (model_id, provider_id),
+                )
+                rows = cursor.fetchall()
+                return [
+                    {
+                        "modelID": r["fallback_model_id"],
+                        "providerID": r["fallback_provider_id"],
+                    }
+                    for r in rows
+                ]
+    except Exception as e:
+        print(f"获取 failover chain 失败：{e}")
+        return []
+
+
+def set_failover_chain(
+    primary_model_id: str,
+    primary_provider_id: str,
+    fallbacks: list[dict],
+) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM model_failover_chains "
+                    "WHERE primary_model_id = %s AND primary_provider_id = %s",
+                    (primary_model_id, primary_provider_id),
+                )
+                for i, fb in enumerate(fallbacks):
+                    cursor.execute(
+                        "INSERT INTO model_failover_chains "
+                        "(primary_model_id, primary_provider_id, fallback_model_id, fallback_provider_id, priority) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (
+                            primary_model_id,
+                            primary_provider_id,
+                            fb["modelID"],
+                            fb["providerID"],
+                            i + 1,
+                        ),
+                    )
+                return True
+    except Exception as e:
+        print(f"设置 failover chain 失败：{e}")
+        return False
+
+
+def get_all_failover_chains() -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, primary_model_id, primary_provider_id, "
+                    "fallback_model_id, fallback_provider_id, priority, enabled "
+                    "FROM model_failover_chains ORDER BY primary_model_id, priority"
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取所有 failover chains 失败：{e}")
+        return []
+
+
+def delete_failover_chain(chain_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM model_failover_chains WHERE id = %s", (chain_id,)
+                )
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除 failover chain 失败：{e}")
+        return False
