@@ -98,21 +98,9 @@ def save_message(
     metadata: Optional[dict] = None,
     agent: str = "build",
     model: Optional[str] = None,
+    opencode_message_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ) -> dict:
-    """
-    保存消息到数据库
-
-    Args:
-        session_id: 会话 ID
-        role: 角色 (user/assistant)
-        content: 消息内容
-        metadata: 额外元数据
-        agent: Agent 类型 (build/plan)
-        model: 模型信息 JSON 字符串
-
-    Returns:
-        包含 message_id 和 image_ids 的字典
-    """
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -120,8 +108,19 @@ def save_message(
 
                 metadata_json = json.dumps(metadata) if metadata else None
                 cursor.execute(
-                    "INSERT INTO conversation_messages (session_id, role, agent, model, content, metadata) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (session_id, role, agent, model, content, metadata_json),
+                    "INSERT INTO conversation_messages "
+                    "(session_id, role, agent, model, content, metadata, opencode_message_id, turn_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        session_id,
+                        role,
+                        agent,
+                        model,
+                        content,
+                        metadata_json,
+                        opencode_message_id,
+                        turn_id,
+                    ),
                 )
 
                 message_id = cursor.lastrowid
@@ -272,9 +271,10 @@ def get_messages(session_id: str, limit: int = 50) -> list[dict]:
 
                 cursor.execute(
                     """
-                    SELECT id, role, agent, model, content, metadata, created_at
+                    SELECT id, role, agent, model, content, metadata, created_at,
+                           opencode_message_id, turn_id
                     FROM conversation_messages 
-                    WHERE session_id = %s 
+                    WHERE session_id = %s AND visible = 1
                     ORDER BY created_at DESC 
                     LIMIT %s
                     """,
@@ -326,7 +326,7 @@ def get_messages(session_id: str, limit: int = 50) -> list[dict]:
                     if isinstance(msg.get("created_at"), (datetime, date)):
                         msg["created_at"] = msg["created_at"].isoformat()
 
-                    del msg["id"]
+                    msg["db_id"] = msg.pop("id")
 
                 return messages
     except Exception as e:
@@ -1554,4 +1554,118 @@ def delete_failover_chain(chain_id: int) -> bool:
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除 failover chain 失败：{e}")
+        return False
+
+
+def get_last_turn(session_id: str) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT turn_id FROM conversation_messages "
+                    "WHERE session_id = %s AND visible = 1 AND turn_id IS NOT NULL "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (session_id,),
+                )
+                row = cursor.fetchone()
+                if not row or not row["turn_id"]:
+                    return None
+                turn_id = row["turn_id"]
+                cursor.execute(
+                    "SELECT id, role, content, opencode_message_id, turn_id, agent, model, metadata "
+                    "FROM conversation_messages "
+                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 "
+                    "ORDER BY created_at ASC",
+                    (session_id, turn_id),
+                )
+                return {"turn_id": turn_id, "messages": cursor.fetchall()}
+    except Exception as e:
+        print(f"获取最后一轮对话失败：{e}")
+        return None
+
+
+def soft_delete_messages_by_turn(session_id: str, turn_id: str) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, role, content, opencode_message_id FROM conversation_messages "
+                    "WHERE session_id = %s AND turn_id = %s AND visible = 1",
+                    (session_id, turn_id),
+                )
+                deleted = cursor.fetchall()
+                cursor.execute(
+                    "UPDATE conversation_messages SET visible = 0 "
+                    "WHERE session_id = %s AND turn_id = %s",
+                    (session_id, turn_id),
+                )
+                conn.commit()
+                return deleted
+    except Exception as e:
+        print(f"软删除消息失败：{e}")
+        return []
+
+
+def soft_delete_last_assistant_in_turn(session_id: str, turn_id: str) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, role, content, opencode_message_id FROM conversation_messages "
+                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 AND role = 'assistant' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (session_id, turn_id),
+                )
+                msg = cursor.fetchone()
+                if not msg:
+                    return None
+                cursor.execute(
+                    "UPDATE conversation_messages SET visible = 0 WHERE id = %s",
+                    (msg["id"],),
+                )
+                conn.commit()
+                return msg
+    except Exception as e:
+        print(f"软删除 assistant 消息失败：{e}")
+        return None
+
+
+def soft_delete_all_assistants_in_turn(session_id: str, turn_id: str) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, role, content, opencode_message_id FROM conversation_messages "
+                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 AND role = 'assistant' "
+                    "ORDER BY created_at ASC",
+                    (session_id, turn_id),
+                )
+                messages = cursor.fetchall()
+                if not messages:
+                    return []
+                ids = [m["id"] for m in messages]
+                placeholders = ",".join(["%s"] * len(ids))
+                cursor.execute(
+                    f"UPDATE conversation_messages SET visible = 0 WHERE id IN ({placeholders})",
+                    ids,
+                )
+                conn.commit()
+                return messages
+    except Exception as e:
+        print(f"软删除所有 assistant 消息失败：{e}")
+        return []
+
+
+def update_message_opencode_id(db_id: int, opencode_message_id: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE conversation_messages SET opencode_message_id = %s WHERE id = %s",
+                    (opencode_message_id, db_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新 opencode message ID 失败：{e}")
         return False

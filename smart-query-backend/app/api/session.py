@@ -1,11 +1,15 @@
 import asyncio
 import json
+import uuid
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user, validate_token
 from app import database
+from app.config import config
 from app.models.query import ArchiveRequest
-from app.services.stream import is_session_processing
+from app.services.stream import is_session_processing, stream_generator
+from app.services.opencode_client import opencode_client
 
 router = APIRouter(tags=["会话"])
 
@@ -72,7 +76,6 @@ async def get_messages(session_id: str, current_user: dict = Depends(get_current
 async def get_image(image_id: int, current_user: dict = Depends(get_current_user)):
     """获取单张图片的 base64 数据"""
     try:
-
         image_data = database.get_image_by_id(image_id)
         if not image_data:
             raise HTTPException(status_code=404, detail="图片不存在")
@@ -353,3 +356,116 @@ async def run_task(task_id: int, current_user: dict = Depends(get_current_user))
 
     asyncio.create_task(execute_task(task_id))
     return {"ok": True, "message": "任务已触发"}
+
+
+@router.delete("/api/sessions/{session_id}/messages/last-turn")
+async def undo_last_turn(
+    session_id: str, current_user: dict = Depends(get_current_user)
+):
+    if is_session_processing(session_id):
+        raise HTTPException(status_code=409, detail="会话正在处理中，请稍后再试")
+
+    turn = await asyncio.to_thread(database.get_last_turn, session_id)
+    if not turn or not turn["messages"]:
+        raise HTTPException(status_code=404, detail="没有可撤销的对话")
+
+    deleted = await asyncio.to_thread(
+        database.soft_delete_messages_by_turn, session_id, turn["turn_id"]
+    )
+
+    oc_ids = [m["opencode_message_id"] for m in deleted if m.get("opencode_message_id")]
+    for oc_id in oc_ids:
+        try:
+            client = await opencode_client.get_client()
+            await client.delete(
+                f"{config.OPENCODE_BASE_URL}/session/{session_id}/message/{oc_id}",
+                auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    user_content = ""
+    for m in deleted:
+        if m["role"] == "user":
+            user_content = m.get("content", "")
+            break
+
+    return {
+        "success": True,
+        "turn_id": turn["turn_id"],
+        "deleted_count": len(deleted),
+        "deleted_user_content": user_content,
+    }
+
+
+@router.post("/api/sessions/{session_id}/retry")
+async def retry_last_turn(
+    session_id: str, current_user: dict = Depends(get_current_user)
+):
+    if is_session_processing(session_id):
+        raise HTTPException(status_code=409, detail="会话正在处理中，请稍后再试")
+
+    turn = await asyncio.to_thread(database.get_last_turn, session_id)
+    if not turn or not turn["messages"]:
+        raise HTTPException(status_code=404, detail="没有可重试的对话")
+
+    deleted = await asyncio.to_thread(
+        database.soft_delete_all_assistants_in_turn, session_id, turn["turn_id"]
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="没有可重试的 assistant 消息")
+
+    for msg in deleted:
+        oc_id = msg.get("opencode_message_id")
+        if oc_id:
+            try:
+                client = await opencode_client.get_client()
+                await client.delete(
+                    f"{config.OPENCODE_BASE_URL}/session/{session_id}/message/{oc_id}",
+                    auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+    user_msg = None
+    for m in turn["messages"]:
+        if m["role"] == "user":
+            user_msg = m
+            break
+
+    if not user_msg:
+        raise HTTPException(status_code=400, detail="找不到对应的用户消息")
+
+    question = user_msg.get("content", "")
+    agent = user_msg.get("agent", "build")
+    model_str = user_msg.get("model")
+    model_dict = None
+    if model_str:
+        try:
+            model_dict = json.loads(model_str)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    workspace = await asyncio.to_thread(
+        database.get_user_workspace, current_user.get("id")
+    )
+
+    return StreamingResponse(
+        stream_generator(
+            question,
+            session_id,
+            agent=agent,
+            model=model_dict,
+            user_id=current_user.get("id"),
+            workspace_path=workspace if workspace else None,
+            turn_id=turn["turn_id"],
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

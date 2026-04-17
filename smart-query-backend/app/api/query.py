@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -322,6 +323,7 @@ async def query_data_stream(
                 workspace_path=workspace
                 if workspace and os.path.isdir(workspace)
                 else None,
+                turn_id=uuid.uuid4().hex,
             ),
             media_type="text/event-stream",
             headers={

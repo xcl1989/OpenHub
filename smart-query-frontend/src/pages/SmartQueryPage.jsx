@@ -436,6 +436,7 @@ const SmartQueryPage = () => {
             content: msg.content,
             timestamp: new Date(msg.created_at),
             agent: msg.agent,
+            streaming: false,
           };
 
           if (msg.role === 'user' && msg.model) {
@@ -477,6 +478,7 @@ const SmartQueryPage = () => {
         setMessages(formattedMessages);
         setConversationId(sessionId);
         setHistoryDrawerVisible(false);
+        setIdleState(true);
         AntMessage.success('已加载历史对话');
 
         setTimeout(() => {
@@ -1044,6 +1046,8 @@ const SmartQueryPage = () => {
       return;
     }
 
+    const turnId = crypto.randomUUID();
+
     const userMessage = {
       id: Date.now().toString(),
       type: 'user',
@@ -1052,6 +1056,7 @@ const SmartQueryPage = () => {
       timestamp: new Date(),
       agent: currentAgent,
       model: currentModel,
+      turnId,
     };
 
     lastModelRef.current[currentAgent] = currentModel;
@@ -1067,10 +1072,8 @@ const SmartQueryPage = () => {
     setCurrentTodos(null);
     setTodoPanelVisible(false);
 
-    // 记录查询开始时间
     queryStartTimeRef.current = Date.now();
 
-    // 取消之前的请求
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -1089,6 +1092,7 @@ const SmartQueryPage = () => {
         reasoning: '',
         timestamp: new Date(),
         streaming: true,
+        turnId,
       },
     ]);
 
@@ -1226,6 +1230,7 @@ const SmartQueryPage = () => {
             setConversationId(finalConversationId);
           }
           setLoading(false);
+          setIdleState(true);
           if (currentModel && currentModel.monthlyLimit > 0) {
             const updated = { ...currentModel, currentUsage: (currentModel.currentUsage || 0) + 1 };
             setCurrentModel(updated);
@@ -1251,6 +1256,135 @@ const SmartQueryPage = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!conversationId) return;
+    try {
+      const result = await queryDataService.undoLastTurn(conversationId);
+      if (result.success) {
+        const lastUserIdx = [...messages].reverse().findIndex(m => m.type === 'user');
+        if (lastUserIdx !== -1) {
+          const cutIdx = messages.length - lastUserIdx;
+          setMessages(prev => prev.slice(0, cutIdx - 1));
+        }
+        if (result.deleted_user_content) {
+          setQuestion(result.deleted_user_content);
+        }
+        AntMessage.success('已撤销');
+      }
+    } catch (err) {
+      AntMessage.error(err.response?.data?.detail || '撤销失败');
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!conversationId || loading) return;
+    const lastUserIdx = [...messages].reverse().findIndex(m => m.type === 'user');
+    if (lastUserIdx === -1) return;
+
+    setMessages(prev => {
+      const cutIdx = prev.length - lastUserIdx;
+      return prev.slice(0, cutIdx);
+    });
+    setLoading(true);
+    setIdleState(false);
+    setStreamingMessageId(null);
+
+    const retryMsgId = (Date.now() + 1).toString();
+    currentAssistantMessageIdRef.current = retryMsgId;
+
+    setMessages(prev => [
+      ...prev,
+      {
+        id: retryMsgId,
+        type: 'assistant',
+        content: '',
+        reasoning: '',
+        timestamp: new Date(),
+        streaming: true,
+      },
+    ]);
+
+    try {
+      await queryDataService.retryStream(
+        conversationId,
+        (data) => {
+          if (data.type === 'text') {
+            const msgId = currentAssistantMessageIdRef.current;
+            setMessages(prev => {
+              const idx = prev.findIndex(m => m.id === msgId);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], content: (next[idx].content || '') + (data.content || ''), streaming: true };
+              return next;
+            });
+          }
+          if (data.type === 'reasoning') {
+            const msgId = currentAssistantMessageIdRef.current;
+            setMessages(prev => {
+              const idx = prev.findIndex(m => m.id === msgId);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], reasoning: (next[idx].reasoning || '') + (data.content || ''), streaming: true };
+              return next;
+            });
+          }
+          if (data.type === 'tool') {
+            const msgId = currentAssistantMessageIdRef.current;
+            const toolKey = `${msgId}_${data.call_id || data.part_id || data.tool}`;
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === msgId
+                  ? {
+                      ...msg,
+                      tools: {
+                        ...(msg.tools || {}),
+                        [toolKey]: {
+                          tool: data.tool,
+                          state: data.state,
+                          input: data.input,
+                          output: data.output,
+                        }
+                      }
+                    }
+                  : msg
+              )
+            );
+          }
+          if (data.type === 'message_start') {
+            const newMessageId = (Date.now()).toString();
+            currentAssistantMessageIdRef.current = newMessageId;
+            setMessages(prev => [
+              ...prev,
+              { id: newMessageId, type: 'assistant', content: '', reasoning: '', timestamp: new Date(), streaming: true },
+            ]);
+          }
+          if (data.type === 'message_complete') {
+            const msgId = currentAssistantMessageIdRef.current;
+            setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, streaming: false } : msg));
+          }
+          if (data.type === 'model_failover') {
+            const fb = data.fallback_model?.modelID || '';
+            AntMessage.info({ content: `模型不可用，已切换至 ${fb}`, duration: 5 });
+          }
+        },
+        () => {
+          setLoading(false);
+          setIdleState(true);
+        },
+        (err) => {
+          setError(err.message || '重试失败');
+          setLoading(false);
+          setIdleState(true);
+        },
+        abortControllerRef.current?.signal
+      );
+    } catch (err) {
+      setError(err.message || '重试失败');
+      setLoading(false);
+      setIdleState(true);
     }
   };
 
@@ -1836,6 +1970,8 @@ const SmartQueryPage = () => {
                         formatDuration={formatDuration}
                         idleState={idleState}
                         lastAssistantMessageId={lastAssistantMessageId}
+                        onUndo={handleUndo}
+                        onRetry={handleRetry}
                       />
                     );
                   });

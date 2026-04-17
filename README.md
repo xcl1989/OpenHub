@@ -30,6 +30,9 @@
 | **Usage Statistics** | Visual charts and tables tracking usage by model and user |
 | **Scheduled Tasks** | Cron-based task scheduling via UI or AI chat, with edit/pause/resume controls |
 | **Task Notifications** | Real-time SSE push for task results, read/unread tabs in notification bell |
+| **Model Failover** | Configurable fallback chain per model + global fallback; auto-switches on failure |
+| **Default Models** | Separate default models for Build, Plan, and Scheduled Tasks |
+| **Undo & Retry** | Undo last conversation turn or retry with same prompt; soft-delete with opencode sync |
 | **Mobile Responsive** | Full mobile-optimized UI with bottom sheets and touch-friendly controls |
 | **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, and more |
 
@@ -66,9 +69,9 @@
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    MySQL Database                            │  │
-│  │  users · sessions · messages · model_permissions · usage    │  │
-│  │  system_config · images · scheduled_tasks                  │
-│  │  scheduled_task_runs · notifications                           │
+  │  │  users · sessions · messages · model_permissions · usage    │  │
+  │  │  system_config · images · scheduled_tasks · notifications   │  │
+  │  │  scheduled_task_runs · model_failover_chains                │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -82,6 +85,8 @@
 - **APScheduler** drives cron-based scheduled tasks: jobs are registered on startup and rescheduled on task create/update
 - Task executor collects AI responses via SSE, automatically filtering out reasoning text to produce clean notification previews
 - Notifications are pushed in-process via an async queue — no Redis required (Redis is used for JWT token and workspace cache only)
+- **Model Failover** automatically retries with configured fallback models on `prompt_async` failure, supporting both interactive queries and scheduled tasks
+- **Undo/Retry** uses soft-delete (`visible=0`) in DB plus opencode message deletion to keep context in sync
 
 ---
 
@@ -228,10 +233,11 @@ OpenHub/
 │   │   │   ├── session.py         #   Session + task + notification endpoints
 │   │   │   └── internal.py        #   Internal API for AI tool calls
 │   │   ├── services/
-│   │   │   ├── stream.py          #   SSE event collector + stream generator
-│   │   │   ├── scheduler.py       #   APScheduler cron task scheduler
-│   │   │   ├── task_executor.py   #   Silent task executor with SSE reasoning filter
-│   │   │   ├── notif_stream.py    #   Notification SSE push dispatcher
+  │   │   │   ├── stream.py          #   SSE event collector + stream generator
+  │   │   │   ├── scheduler.py       #   APScheduler cron task scheduler
+  │   │   │   ├── task_executor.py   #   Silent task executor with SSE reasoning filter
+  │   │   │   ├── model_failover.py  #   Failover chain builder + prompt retry logic
+  │   │   │   ├── notif_stream.py    #   Notification SSE push dispatcher
 │   │   │   ├── opencode_client.py #   HTTP client for opencode API
 │   │   │   └── opencode_launcher.py #  Process management for opencode serve
 │   │   ├── core/
@@ -260,8 +266,9 @@ OpenHub/
 │   │   │   ├── UserSkillManager.jsx #   Per-user skill enable/disable
 │   │   │   ├── DiffViewer.jsx     #     File change viewer
 │   │   │   ├── HistoryDrawer.jsx  #     Conversation history
-│   │   │   ├── ToolCall.jsx       #     Tool invocation display
-│   │   │   ├── MessageBubble.jsx  #     Chat message bubble
+  │   │   │   ├── ToolCall.jsx       #     Tool invocation display
+  │   │   │   ├── AssistantMessage.jsx #  Assistant message + undo/retry buttons
+  │   │   │   ├── MessageBubble.jsx  #     Chat message bubble
 │   │   │   ├── MarkdownRenderer.jsx #   Markdown + code highlighting
 │   │   │   ├── TaskManager.jsx    #     Scheduled task drawer with inline editing
 │   │   │   ├── NotificationBell.jsx #   Notification bell with read/unread tabs
@@ -303,6 +310,8 @@ OpenHub/
 |----------|--------|-------------|
 | `/api/sessions` | GET | List sessions (paginated) |
 | `/api/sessions/{id}/messages` | GET | Get session messages |
+| `/api/sessions/{id}/messages/last-turn` | DELETE | Undo last conversation turn (soft-delete) |
+| `/api/sessions/{id}/retry` | POST | Retry last turn (delete assistants, re-prompt via SSE) |
 | `/api/session/archive` | POST | Archive a session |
 | `/api/images/{image_id}` | GET | Get uploaded image |
 
@@ -368,6 +377,9 @@ OpenHub/
 | `/api/admin/opencode/start` | POST | Start opencode serve |
 | `/api/admin/opencode/restart` | POST | Restart opencode serve |
 | `/api/admin/system-config` | GET/PUT | System configuration (default models, etc.) |
+| `/api/admin/failover-chains` | GET | Get all model failover chains |
+| `/api/admin/failover-chains` | PUT | Set failover chain for a model |
+| `/api/admin/failover-chains/{id}` | DELETE | Delete a failover chain rule |
 | `/api/admin/usage/stats` | GET | Get usage statistics |
 
 ### Internal API
@@ -416,7 +428,8 @@ OpenHub/
 Configured via the admin UI (`/admin`):
 
 - **opencode service**: work directory, credentials, auto-start toggle
-- **Default models**: set default build/plan models
+- **Default models**: set default build/plan/task models
+- **Model failover**: configure fallback chains per model + global fallback model
 - **Model permissions**: per-user allowed models with monthly usage limits
 - **Provider API keys**: manage AI provider credentials
 

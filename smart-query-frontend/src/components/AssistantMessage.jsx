@@ -1,11 +1,11 @@
 import React from 'react';
-import { Space, Card, Avatar, Typography, Spin, Tag } from 'antd';
-import { QuestionCircleOutlined } from '@ant-design/icons';
+import { Space, Card, Avatar, Typography, Spin, Tag, Button } from 'antd';
+import { QuestionCircleOutlined, UndoOutlined, ReloadOutlined } from '@ant-design/icons';
 import MarkdownRenderer from './MarkdownRenderer';
 import ToolCall from './ToolCall';
 import QuestionFormInline from './QuestionFormInline';
 
-const AssistantMessage = ({ message, filterContent, messageTimings, handleQuestionSubmit, pendingQuestionIdRef, formatDuration, idleState, lastAssistantMessageId }) => {
+const AssistantMessage = ({ message, filterContent, messageTimings, handleQuestionSubmit, pendingQuestionIdRef, formatDuration, idleState, lastAssistantMessageId, onUndo, onRetry }) => {
   return (
     <div
       className="message-item-assistant"
@@ -169,21 +169,47 @@ const AssistantMessage = ({ message, filterContent, messageTimings, handleQuesti
                        · 耗时 {formatDuration(messageTimings[message.id])}
                      </span>
                    )}
-                </div>
-                {message.type === 'assistant' && (
-                  <Tag 
-                    style={{ 
-                      fontSize: 10,
-                      background: '#f3f4f6',
-                      color: '#6b7280',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 4,
-                      padding: '2px 8px'
-                    }}
-                  >
-                    由 OpenHub 大模型生成
-                  </Tag>
-                )}
+                 </div>
+                 {message.type === 'assistant' && (
+                   <Space size={4} style={{ marginLeft: 4 }}>
+                     <Tag 
+                       style={{ 
+                         fontSize: 10,
+                         background: '#f3f4f6',
+                         color: '#6b7280',
+                         border: '1px solid #e5e7eb',
+                         borderRadius: 4,
+                         padding: '2px 8px'
+                       }}
+                     >
+                       由 OpenHub 大模型生成
+                     </Tag>
+                     {message.id === lastAssistantMessageId && !message.streaming && idleState && (
+                       <>
+                         <Button
+                           type="text"
+                           size="small"
+                           icon={<ReloadOutlined />}
+                           onClick={onRetry}
+                           title="重新生成"
+                           style={{ fontSize: 11, color: '#6b7280', padding: '0 4px', height: 20 }}
+                         >
+                           重试
+                         </Button>
+                         <Button
+                           type="text"
+                           size="small"
+                           icon={<UndoOutlined />}
+                           onClick={onUndo}
+                           title="撤销本轮"
+                           style={{ fontSize: 11, color: '#6b7280', padding: '0 4px', height: 20 }}
+                         >
+                           撤销
+                         </Button>
+                       </>
+                     )}
+                   </Space>
+                 )}
               </div>
           </>
         </Card>

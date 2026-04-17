@@ -265,6 +265,76 @@ export const queryDataService = {
     return response.data;
   },
 
+  undoLastTurn: async (sessionId) => {
+    const response = await apiClient.delete(`/sessions/${sessionId}/messages/last-turn`);
+    return response.data;
+  },
+
+  retryStream: async (sessionId, onChunk, onEnd, onError, signal = null) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/retry`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'text/event-stream',
+        },
+        signal,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          clearAuthToken();
+          window.location.href = '/login';
+          return;
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let lastEventType = null;
+      let hasError = false;
+
+      while (true) {
+        if (signal?.aborted) break;
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.payload && data.payload.type) {
+                lastEventType = data.payload.type;
+                onChunk?.({ type: data.payload.type, ...data.payload.properties });
+              } else {
+                if (data.type === 'error') { hasError = true; onError?.(new Error(data.error)); }
+                lastEventType = data.type;
+                onChunk?.(data);
+              }
+              if (data.done && data.type === 'error') break;
+            } catch (e) {
+              console.warn('Failed to parse SSE data:', e, line);
+            }
+          }
+        }
+      }
+
+      if (signal?.aborted) { onEnd?.(sessionId); return; }
+      if (hasError) return;
+      onEnd?.(sessionId);
+    } catch (error) {
+      if (error.name === 'AbortError') { onEnd?.(sessionId); return; }
+      onError?.(error);
+    }
+  },
+
   reconnectStream: async (sessionId, onChunk, onEnd, onError, signal = null) => {
     try {
       const token = getAuthToken();

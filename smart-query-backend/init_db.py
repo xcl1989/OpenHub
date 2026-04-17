@@ -65,8 +65,14 @@ TABLES = {
             model VARCHAR(200) DEFAULT NULL,
             content LONGTEXT,
             metadata JSON DEFAULT NULL,
+            opencode_message_id VARCHAR(128) DEFAULT NULL,
+            turn_id VARCHAR(64) DEFAULT NULL,
+            visible TINYINT DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            INDEX idx_session_id (session_id)
+            INDEX idx_session_id (session_id),
+            INDEX idx_session_visible (session_id, visible),
+            INDEX idx_turn_id (turn_id),
+            INDEX idx_oc_msg_id (opencode_message_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "conversation_images": """
@@ -299,6 +305,22 @@ def init_database():
             print(f"  [OK] admin workspace initialized at {workspace_dir}")
 
         conn.commit()
+
+        MIGRATIONS = [
+            "ALTER TABLE conversation_messages ADD COLUMN opencode_message_id VARCHAR(128) DEFAULT NULL",
+            "ALTER TABLE conversation_messages ADD COLUMN turn_id VARCHAR(64) DEFAULT NULL",
+            "ALTER TABLE conversation_messages ADD COLUMN visible TINYINT DEFAULT 1",
+            "CREATE INDEX idx_oc_msg_id ON conversation_messages(opencode_message_id)",
+            "CREATE INDEX idx_turn_id ON conversation_messages(turn_id)",
+            "CREATE INDEX idx_session_visible ON conversation_messages(session_id, visible)",
+        ]
+        for sql in MIGRATIONS:
+            try:
+                cursor.execute(sql)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
         cursor.close()
 
         print("\nDatabase initialization complete!")

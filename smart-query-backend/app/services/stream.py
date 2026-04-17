@@ -108,13 +108,22 @@ async def stream_generator(
     model: Optional[dict] = None,
     user_id: Optional[int] = None,
     workspace_path: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ):
     queue: asyncio.Queue = asyncio.Queue()
     processing_sessions[session_id] = queue
 
     task = asyncio.create_task(
         _background_collector(
-            session_id, question, images, queue, agent, model, user_id, workspace_path
+            session_id,
+            question,
+            images,
+            queue,
+            agent,
+            model,
+            user_id,
+            workspace_path,
+            turn_id,
         )
     )
 
@@ -164,6 +173,7 @@ async def _background_collector(
     model: Optional[dict] = None,
     user_id: Optional[int] = None,
     workspace_path: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ):
     start_time = time.time()
     log_dir = Path(__file__).parent.parent / "logs" / session_id
@@ -174,6 +184,7 @@ async def _background_collector(
     message_tools: dict[str, dict] = {}
     message_reasoning: dict[str, str] = {}
     last_message_id = ""
+    user_msg_db_id: Optional[int] = None
 
     abort_event = asyncio.Event()
     _abort_events[session_id] = abort_event
@@ -194,7 +205,7 @@ async def _background_collector(
     model_config = model or (await get_default_model())
     model_str = json.dumps(model_config)
 
-    await asyncio.to_thread(
+    save_result = await asyncio.to_thread(
         database.save_message,
         session_id,
         "user",
@@ -202,7 +213,10 @@ async def _background_collector(
         metadata,
         agent,
         model_str,
+        None,
+        turn_id,
     )
+    user_msg_db_id = save_result.get("message_id")
 
     title = question[:50] + "..." if len(question) > 50 else question
     await asyncio.to_thread(database.save_session, session_id, title, user_id)
@@ -346,6 +360,13 @@ async def _background_collector(
                     message_id = info.get("id", "")
                     role = info.get("role", "")
 
+                    if role == "user" and message_id and user_msg_db_id:
+                        await asyncio.to_thread(
+                            database.update_message_opencode_id,
+                            user_msg_db_id,
+                            message_id,
+                        )
+
                     if role == "assistant" and message_id != last_message_id:
                         if last_message_id:
                             await queue.put(
@@ -361,6 +382,7 @@ async def _background_collector(
                                 log_file,
                                 agent=agent,
                                 model=model_str,
+                                turn_id=turn_id,
                             )
 
                         message_count += 1
@@ -458,6 +480,7 @@ async def _background_collector(
                     log_file,
                     agent=agent,
                     model=model_str,
+                    turn_id=turn_id,
                 )
 
             await queue.put(
@@ -517,6 +540,7 @@ async def _background_collector(
                 log_file,
                 agent=agent,
                 model=model_str,
+                turn_id=turn_id,
             )
 
         await queue.put(None)
@@ -539,6 +563,7 @@ async def _save_message_to_db(
     log_file: Path,
     agent: str = "build",
     model: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ):
     if message_id not in message_contents:
         return
@@ -557,6 +582,8 @@ async def _save_message_to_db(
         msg_metadata if msg_metadata else None,
         agent,
         model,
+        message_id,
+        turn_id,
     )
 
     await asyncio.to_thread(
