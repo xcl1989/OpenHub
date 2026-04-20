@@ -131,7 +131,7 @@ TABLES = {
         CREATE TABLE IF NOT EXISTS tool_permissions (
             id INT AUTO_INCREMENT PRIMARY KEY,
             tool_name VARCHAR(100) NOT NULL,
-            risk_level ENUM('safe', 'moderate', 'dangerous') DEFAULT 'safe',
+            risk_level ENUM('safe', 'moderate', 'dangerous', 'custom') DEFAULT 'safe',
             description VARCHAR(500),
             global_action ENUM('deny', 'ask', 'allow') DEFAULT 'allow',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -313,6 +313,7 @@ def init_database():
             "CREATE INDEX idx_oc_msg_id ON conversation_messages(opencode_message_id)",
             "CREATE INDEX idx_turn_id ON conversation_messages(turn_id)",
             "CREATE INDEX idx_session_visible ON conversation_messages(session_id, visible)",
+            "ALTER TABLE tool_permissions MODIFY COLUMN risk_level ENUM('safe', 'moderate', 'dangerous', 'custom') DEFAULT 'safe'",
         ]
         for sql in MIGRATIONS:
             try:

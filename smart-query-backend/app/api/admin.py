@@ -71,13 +71,27 @@ def _init_user_workspace(username: str) -> str:
 
     tools_src = project_opencode / "tools"
     tools_dst = opencode_dir / "tools"
-    if tools_src.exists() and not tools_dst.exists():
-        shutil.copytree(str(tools_src), str(tools_dst))
+    if tools_src.exists():
+        if tools_dst.exists():
+            for src_file in tools_src.iterdir():
+                if src_file.is_file():
+                    shutil.copy2(str(src_file), str(tools_dst / src_file.name))
+        else:
+            shutil.copytree(str(tools_src), str(tools_dst))
 
     nm_src = project_opencode / "node_modules"
     nm_dst = opencode_dir / "node_modules"
     if nm_src.exists() and not nm_dst.exists():
         shutil.copytree(str(nm_src), str(nm_dst))
+
+    memory_files = {
+        "MEMORY.md": "# MEMORY.md\n\n<!-- AI 编辑区 -->\n\n<!-- /AI 编辑区 -->",
+        "USER.md": "# USER.md\n\n<!-- AI 编辑区 -->\n\n<!-- /AI 编辑区 -->",
+    }
+    for filename, default_content in memory_files.items():
+        p = ws_path / filename
+        if not p.exists():
+            p.write_text(default_content, encoding="utf-8")
 
     return str(ws_path)
 

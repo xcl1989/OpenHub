@@ -11,6 +11,7 @@ from app.config import config
 from app import database
 from app.services.opencode_client import opencode_client
 from app.services.model_failover import try_prompt_with_failover
+from app.services import memory
 from app.models.query import ImageData
 
 logger = logging.getLogger(__name__)
@@ -246,7 +247,15 @@ async def _background_collector(
                 )
                 return
 
-            parts = [{"type": "text", "text": question}]
+            memory_ctx = await asyncio.to_thread(
+                memory.build_memory_context, workspace_path
+            )
+            if memory_ctx:
+                full_text = f"{memory_ctx}\n\n---\n\n{question}"
+            else:
+                full_text = question
+
+            parts = [{"type": "text", "text": full_text}]
 
             if images:
                 for img_data in images:
@@ -301,6 +310,8 @@ async def _background_collector(
             message_count = 0
             last_message_id = ""
             pushed_message_starts: set[str] = set()
+            last_content_time = time.monotonic()
+            CONTENT_TIMEOUT = 60.0
 
             await asyncio.to_thread(
                 _write_log,
@@ -330,6 +341,21 @@ async def _background_collector(
                     )
                     break
 
+                now = time.monotonic()
+                if now - last_content_time > CONTENT_TIMEOUT:
+                    timeout_msg = (
+                        f"模型响应超时（{CONTENT_TIMEOUT:.0f}秒内无内容），请重试"
+                    )
+                    await asyncio.to_thread(
+                        _write_log,
+                        log_file,
+                        f"[ERROR] {timeout_msg}\n",
+                    )
+                    await queue.put(
+                        f"data: {json.dumps({'error': timeout_msg, 'type': 'error'})}\n\n"
+                    )
+                    break
+
                 await asyncio.to_thread(_write_log, log_file, f"{line}\n")
 
                 if not line.startswith("data: "):
@@ -356,6 +382,7 @@ async def _background_collector(
                     continue
 
                 if event_type == "message.updated":
+                    last_content_time = time.monotonic()
                     info = properties.get("info", {})
                     message_id = info.get("id", "")
                     role = info.get("role", "")
@@ -405,6 +432,7 @@ async def _background_collector(
                             )
 
                 elif event_type == "message.part.updated":
+                    last_content_time = time.monotonic()
                     part = properties.get("part", {})
                     part_id = part.get("id", "")
                     part_type = part.get("type", "")
@@ -438,6 +466,7 @@ async def _background_collector(
                 elif event_type == "message.part.delta":
                     delta = properties.get("delta", "")
                     if delta and last_message_id:
+                        last_content_time = time.monotonic()
                         message_contents[last_message_id] += delta
 
                 elif event_type == "session.status":

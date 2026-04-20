@@ -1111,6 +1111,8 @@ def sync_tools_from_opencode() -> list:
         "scheduled_task_delete": ("custom", "删除定时任务"),
         "scheduled_task_pause": ("custom", "暂停定时任务"),
         "scheduled_task_resume": ("custom", "恢复定时任务"),
+        "memory_save": ("custom", "保存跨会话记忆"),
+        "memory_recall": ("custom", "读取跨会话记忆"),
     }
     for name, (risk, desc) in builtin_tools.items():
         upsert_tool_permission(name, risk, desc)

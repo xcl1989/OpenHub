@@ -8,6 +8,7 @@ from app.config import config
 from app.services.opencode_client import opencode_client
 from app.services import notif_stream
 from app.services.model_failover import build_failover_chain
+from app.services import memory
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,16 @@ async def execute_task(task_id: int):
                     model_dict = {"providerID": parts[0], "modelID": parts[1]}
                     model_str = raw
 
-        prompt_text = (
+        memory_ctx = await asyncio.to_thread(memory.build_memory_context, workspace)
+        task_intro = (
             f"这是一个用户设置的定时任务，现在到了执行时间。\n"
             f"任务名称：{task['name']}\n"
             f"请直接执行以下任务并以简洁的方式回复用户：\n"
-            f"{task['question']}"
         )
+        if memory_ctx:
+            prompt_text = f"{memory_ctx}\n\n---\n\n{task_intro}{task['question']}"
+        else:
+            prompt_text = f"{task_intro}{task['question']}"
 
         await asyncio.to_thread(
             database.save_message,

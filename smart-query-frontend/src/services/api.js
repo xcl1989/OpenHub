@@ -675,4 +675,11 @@ export const taskService = {
   },
 };
 
+export const memoryService = {
+  getMemory: async () => {
+    const response = await apiClient.get('/memory');
+    return response.data;
+  },
+};
+
 export default apiClient;

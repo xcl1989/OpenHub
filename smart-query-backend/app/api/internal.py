@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app import database
 from app.config import config
+from app.services import memory
 
 router = APIRouter(prefix="/api/internal", tags=["内部接口"])
 
@@ -216,3 +217,58 @@ async def run_task(
 
     asyncio.create_task(execute_task(task_id))
     return {"ok": True, "message": "任务已触发"}
+
+
+class MemorySaveRequest(BaseModel):
+    memory_type: str = Field(..., description="记忆类型: facts 或 preferences")
+    content: str = Field(..., description="记忆内容 (markdown)")
+
+
+@router.post("/memory/save")
+async def save_memory_endpoint(
+    body: MemorySaveRequest,
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    user = database.get_user_by_id(user_id)
+    if not user or not user.get("workspace_path"):
+        raise HTTPException(status_code=404, detail="用户工作空间不存在")
+
+    result = memory.save_memory(user["workspace_path"], body.memory_type, body.content)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "保存失败"))
+
+    return {"ok": True, "path": result["path"], "type": result["type"]}
+
+
+@router.get("/memory/read")
+async def read_memory_endpoint(
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    user = database.get_user_by_id(user_id)
+    if not user or not user.get("workspace_path"):
+        raise HTTPException(status_code=404, detail="用户工作空间不存在")
+
+    result = memory.read_memory(user["workspace_path"])
+    return {"ok": True, "memory": result}
+
+
+@router.get("/memory/search")
+async def search_memory_endpoint(
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    query = request.query_params.get("query", "")
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    user = database.get_user_by_id(user_id)
+    if not user or not user.get("workspace_path"):
+        raise HTTPException(status_code=404, detail="用户工作空间不存在")
+
+    result = memory.search_memory(user["workspace_path"], query)
+    return result

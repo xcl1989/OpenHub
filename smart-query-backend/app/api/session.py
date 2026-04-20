@@ -10,6 +10,7 @@ from app.config import config
 from app.models.query import ArchiveRequest
 from app.services.stream import is_session_processing, stream_generator
 from app.services.opencode_client import opencode_client
+from app.services import memory
 
 router = APIRouter(tags=["会话"])
 
@@ -469,3 +470,19 @@ async def retry_last_turn(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/api/memory")
+async def get_memory(current_user: dict = Depends(get_current_user)):
+    """获取当前用户的跨会话记忆（只读）"""
+    if not current_user or not current_user.get("id"):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    workspace = await asyncio.to_thread(
+        database.get_user_workspace, current_user.get("id")
+    )
+    if not workspace:
+        return {"facts": "", "preferences": ""}
+
+    result = await asyncio.to_thread(memory.read_memory, workspace)
+    return result

@@ -37,7 +37,8 @@ import {
   FolderOpenOutlined,
   SwapOutlined,
   ThunderboltOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  BookOutlined
 } from '@ant-design/icons';
 import { queryDataService, authService, clearAuthToken, diffService } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -50,6 +51,7 @@ import DiffViewer from '../components/DiffViewer';
 import UserSkillManager from '../components/UserSkillManager';
 import TaskManager from '../components/TaskManager';
 import NotificationBell from '../components/NotificationBell';
+import MemoryViewer from '../components/MemoryViewer';
 import TodoFloatPanel from '../components/TodoFloatPanel';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
@@ -99,6 +101,7 @@ const SmartQueryPage = () => {
   const [diffViewerVisible, setDiffViewerVisible] = useState(false);
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [taskManagerVisible, setTaskManagerVisible] = useState(false);
+  const [memoryViewerVisible, setMemoryViewerVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
@@ -1589,6 +1592,12 @@ const SmartQueryPage = () => {
         isMobile={isMobile}
       />
 
+      <MemoryViewer
+        open={memoryViewerVisible}
+        onClose={() => setMemoryViewerVisible(false)}
+        isMobile={isMobile}
+      />
+
       {/* 归档确认 Modal */}
       <Modal
         title="确认归档"
@@ -1830,6 +1839,7 @@ const SmartQueryPage = () => {
           onClick={() => {
             setFileManagerVisible(false);
             setTaskManagerVisible(false);
+            setMemoryViewerVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1849,6 +1859,19 @@ const SmartQueryPage = () => {
           title="任务管理"
         >
           <span className="toolbar-btn-text">任务管理</span>
+        </Button>
+        <Button
+          icon={<BookOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setMemoryViewerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="记忆"
+        >
+          <span className="toolbar-btn-text">记忆</span>
         </Button>
         <NotificationBell />
       </div>

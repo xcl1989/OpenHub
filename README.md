@@ -2,7 +2,7 @@
 
 # OpenHub
 
-> An enterprise-grade multi-user web platform built on [opencode](https://opencode.ai), featuring user management, model access control, per-user workspaces, and a rich ecosystem of modular skills.
+> An enterprise-grade multi-user AI platform built on [opencode](https://opencode.ai), with user management, model access control, per-user workspaces, cross-session memory, and 24+ modular skills.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
@@ -14,27 +14,20 @@
 
 ## Features
 
-### Platform Capabilities
-
 | Feature | Description |
 |---------|-------------|
 | **Multi-user Management** | User CRUD, role-based admin, JWT authentication |
-| **Per-user Workspaces** | Isolated workspace directories with independent `.opencode/skills/` per user |
+| **Per-user Workspaces** | Isolated directories with independent `.opencode/skills/` + `.opencode/tools/` |
 | **Model Access Control** | Per-user model permissions with monthly usage limits |
-| **Provider Management** | Configure AI providers (API keys, default models) via admin UI |
-| **opencode Service Control** | Start/stop/restart opencode serve from the admin panel |
-| **Real-time Streaming** | SSE-based streaming responses with tool/reasoning display |
-| **Multi-modal Input** | Image upload and analysis in chat |
-| **File Browser** | Browse, preview, search, and download workspace files |
-| **Tool Permissions** | Per-user deny/ask/allow control for AI tools |
-| **Usage Statistics** | Visual charts and tables tracking usage by model and user |
-| **Scheduled Tasks** | Cron-based task scheduling via UI or AI chat, with edit/pause/resume controls |
-| **Task Notifications** | Real-time SSE push for task results, read/unread tabs in notification bell |
+| **Cross-session Memory** | AI auto-saves facts & preferences per user; context injected into every prompt |
 | **Model Failover** | Configurable fallback chain per model + global fallback; auto-switches on failure |
-| **Default Models** | Separate default models for Build, Plan, and Scheduled Tasks |
-| **Undo & Retry** | Undo last conversation turn or retry with same prompt; soft-delete with opencode sync |
+| **Scheduled Tasks** | Cron-based task scheduling via UI or AI chat, with edit/pause/resume controls |
+| **Undo & Retry** | Undo last turn or retry with same prompt; soft-delete + opencode sync |
+| **Real-time Streaming** | SSE-based streaming with tool call and reasoning display |
+| **Tool Permissions** | Per-user deny/ask/allow control for AI tools |
+| **File Browser** | Browse, preview, search, and download workspace files |
+| **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, data analytics, and more |
 | **Mobile Responsive** | Full mobile-optimized UI with bottom sheets and touch-friendly controls |
-| **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, and more |
 
 ---
 
@@ -42,7 +35,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                       Opencode Agent Platform                     │
+│                       OpenHub Agent Platform                      │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌──────────────────┐     ┌──────────────────┐                   │
@@ -58,151 +51,115 @@
 │                    ┌───────────────┼───────────────┐              │
 │                    ▼               ▼               ▼              │
 │           ┌──────────────┐ ┌──────────────┐ ┌──────────────┐     │
-│           │   workspace/  │ │  workspace/  │ │  workspace/  │     │
-│           │    admin/     │ │   testuser/  │ │  newuser/    │     │
-│           │ ┌───────────┐│ │ ┌───────────┐│ │ ┌───────────┐│     │
-│           │ │ .opencode/ ││ │ │ .opencode/ ││ │ │ .opencode/ ││     │
-│           │ │ └─skills/  ││ │ │ └─skills/  ││ │ │ └─skills/  ││     │
-│           │ │ AGENTS.md  ││ │ │ AGENTS.md  ││ │ │ AGENTS.md  ││     │
-│           │ └───────────┘│ │ └───────────┘│ │ └───────────┘│     │
+│           │  workspace/  │ │  workspace/  │ │  workspace/  │     │
+│           │   admin/     │ │  testuser/   │ │  newuser/    │     │
+│           │ ┌──────────┐ │ │ ┌──────────┐ │ │ ┌──────────┐ │     │
+│           │ │.opencode/ │ │ │ │.opencode/ │ │ │ │.opencode/ │ │     │
+│           │ │├─skills/  │ │ │ │├─skills/  │ │ │ │├─skills/  │ │     │
+│           │ │└─tools/   │ │ │ │└─tools/   │ │ │ │└─tools/   │ │     │
+│           │ │ MEMORY.md │ │ │ │ MEMORY.md │ │ │ │ MEMORY.md │ │     │
+│           │ │ USER.md   │ │ │ │ USER.md   │ │ │ │ USER.md   │ │     │
+│           │ └──────────┘ │ │ └──────────┘ │ │ └──────────┘ │     │
 │           └──────────────┘ └──────────────┘ └──────────────┘     │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
-│  │                    MySQL Database                            │  │
-  │  │  users · sessions · messages · model_permissions · usage    │  │
-  │  │  system_config · images · scheduled_tasks · notifications   │  │
-  │  │  scheduled_task_runs · model_failover_chains                │  │
+│  │  MySQL: users · sessions · messages · permissions · usage    │  │
+│  │  tasks · notifications · failover_chains · tool_permissions  │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
 
-- **Single opencode instance** on `:4096` shared by all users, with session-level `?directory=` parameter to isolate per-user workspaces
-- Each workspace has its own `.opencode/skills/`, so different users can have different skill sets
-- `prompt_async` and `global/event` APIs pass `?directory=` to ensure opencode loads the correct project context
-- Backend auto-starts opencode serve on launch (configurable via admin panel)
-- **APScheduler** drives cron-based scheduled tasks: jobs are registered on startup and rescheduled on task create/update
-- Task executor collects AI responses via SSE, automatically filtering out reasoning text to produce clean notification previews
-- Notifications are pushed in-process via an async queue — no Redis required (Redis is used for JWT token and workspace cache only)
-- **Model Failover** automatically retries with configured fallback models on `prompt_async` failure, supporting both interactive queries and scheduled tasks
-- **Undo/Retry** uses soft-delete (`visible=0`) in DB plus opencode message deletion to keep context in sync
+- **Single opencode instance** on `:4096` shared by all users; session-level `?directory=` isolates workspaces
+- Each workspace has independent `.opencode/skills/` and `.opencode/tools/`
+- **Model Failover** auto-retries with configured fallback models on `prompt_async` failure
+- **Undo/Retry** uses soft-delete (`visible=0`) in DB + opencode message deletion
+- **Content timeout** detects hung models (60s no-content) and returns error to frontend
+
+---
+
+## Cross-session Memory System
+
+Memory gives each user persistent context across conversations — the AI remembers project details, preferences, and work progress without being asked again.
+
+### How it works
+
+```
+User chats → AI decides info is worth remembering
+                ↓
+         memory_save tool (opencode)
+                ↓
+      Writes to workspace MEMORY.md / USER.md
+                ↓
+build_memory_context() reads files on next prompt
+                ↓
+      Context prepended to user's question
+```
+
+### Two memory types
+
+| File | Type | Content |
+|------|------|---------|
+| `MEMORY.md` | Facts | Project background, work progress, technical decisions, codebase discoveries |
+| `USER.md` | Preferences | Communication style, language preferences, workflow habits |
+
+### Architecture
+
+- **Storage**: Plain markdown files in user workspace (works with git, human-readable)
+- **Write**: AI calls `memory_save` tool (registered as opencode custom tool in `.opencode/tools/memory.ts`)
+- **Read**: Every prompt auto-injects memory context via `build_memory_context()` (max 2000 chars)
+- **Frontend**: Read-only viewer (Drawer) — users can view but not edit directly
+- **Admin**: Memory tools appear in Tool Permission Manager, can be enabled/disabled per user
+- **Scheduled tasks**: Memory context is also injected into task prompts
+
+### Backend components
+
+| File | Role |
+|------|------|
+| `app/services/memory.py` | Core: `build_memory_context()`, `save_memory()`, `read_memory()`, `search_memory()` |
+| `app/api/internal.py` | Internal endpoints: `/memory/save`, `/memory/read`, `/memory/search` |
+| `app/api/session.py` | User endpoint: `GET /api/memory` (read-only) |
+| `.opencode/tools/memory.ts` | opencode tool: `memory_save` + `memory_recall` |
+| `app/components/MemoryViewer.jsx` | Frontend: read-only drawer with tabs |
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-| Component | Version | Notes |
-|-----------|---------|-------|
-| Python | 3.10+ | Backend runtime |
-| Node.js | 18+ | Frontend build |
-| MySQL | 5.7+ | Database |
-| opencode | 1.4+ | AI agent runtime |
-
-### 1. Clone and Configure
-
 ```bash
-git clone <repo-url>
-cd OpenHub
+# 1. Clone and configure
+git clone <repo-url> && cd OpenHub
+cp smart-query-backend/.env.example smart-query-backend/.env   # Edit with MySQL creds, JWT secret
+cp smart-query-frontend/.env.example smart-query-frontend/.env # Edit API URL
 
-# Backend config
-cp smart-query-backend/.env.example smart-query-backend/.env
-# Edit .env with your MySQL credentials, JWT secret, etc.
+# 2. Install dependencies
+cd smart-query-backend && pip install -r requirements.txt
+cd ../smart-query-frontend && npm install
 
-# Frontend config
-cp smart-query-frontend/.env.example smart-query-frontend/.env
-# Edit .env with your backend API URL
+# 3. Initialize database
+cd ../smart-query-backend && python init_db.py
+
+# 4. Start services
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # Backend (auto-starts opencode)
+cd ../smart-query-frontend && npm run dev                      # Frontend
 ```
 
-### 2. Install Dependencies
+Access: **Frontend** http://localhost:3000 · **API Docs** http://localhost:8000/docs · Default login: `admin`/`admin`
 
-```bash
-# Backend
-cd smart-query-backend
-pip install -r requirements.txt
-
-# Frontend
-cd ../smart-query-frontend
-npm install
-```
-
-### 3. Initialize Database
-
-```bash
-cd smart-query-backend
-python init_db.py
-```
-
-This creates all required tables (`users`, `conversation_sessions`, `conversation_messages`, `conversation_images`, `user_model_permissions`, `system_config`) and a default admin user (password: `admin`, configurable via `ADMIN_PASSWORD` env var).
-
-### 4. Start Services
-
-```bash
-# Terminal 1: Backend (auto-starts opencode serve)
-cd smart-query-backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Terminal 2: Frontend
-cd smart-query-frontend
-npm run dev
-```
-
-### 5. Access
-
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:3000 |
-| Backend API | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
-| opencode serve | http://localhost:4096 |
-
-Default admin credentials: `admin` / `admin`
+Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, [opencode](https://opencode.ai) 1.4+
 
 ---
 
 ## Screenshots
 
-### 💬 Chat Interface
-Streamlined chat experience with real-time AI responses, multi-modal input, conversation history, file browser, and skill manager.
+| Chat Interface | File Management | Admin Panel |
+|:-:|:-:|:-:|
+| ![Chat](pic/conversation.png) | ![Files](pic/filemanage.png) | ![Admin](pic/usermanage.png) |
 
-![Chat Interface](pic/conversation.png)
-
-### 📁 File Management
-Browse, preview, search, and download files in your workspace. Supports text and image preview with full mobile responsiveness.
-
-![File Management](pic/filemanage.png)
-
-### 🛠️ Tool Permission Management
-Granular control over which tools each user can access — deny, ask, or allow per tool with easy toggle interface.
-
-![Tool Permission Management](pic/toolmanage.png)
-
-### 📊 Usage Statistics
-Track AI usage by model, user, and time period. Visualize token consumption and request counts with charts and sortable tables.
-
-![Usage Statistics](pic/usage.png)
-
-### 👥 User Management
-Comprehensive user administration panel for creating, editing, and managing user accounts with role-based access control.
-
-![User Management](pic/usermanage.png)
-
-### 🤖 Model Configuration
-Flexible AI model management with provider integration, API key configuration, and default model settings.
-
-![Model Settings](pic/modelsetting.png)
-
-### ⚙️ Service Settings
-Opencode service control panel for managing the AI agent runtime, including auto-start configuration and service monitoring.
-
-![Opencode Settings](pic/opencodesetting.png)
-
-### 🎯 User Skill Manager
-Enable or disable modular skills per user. Skills include PDF, Excel, Word, PPT, email, news, frontend design, data analytics, and more.
-
-![User Skill Manager](pic/userskillmanage.png)
+| Tool Permissions | Usage Statistics | Model Settings |
+|:-:|:-:|:-:|
+| ![Tools](pic/toolmanage.png) | ![Usage](pic/usage.png) | ![Models](pic/modelsetting.png) |
 
 ---
 
@@ -210,338 +167,125 @@ Enable or disable modular skills per user. Skills include PDF, Excel, Word, PPT,
 
 ```
 OpenHub/
-├── .opencode/skills/              # Skill packages (template source)
-│   ├── data-analytics/            #   Data query & analysis
-│   ├── pdf/                       #   PDF processing
-│   ├── xlsx/                      #   Spreadsheet handling
-│   ├── docx/                      #   Word documents
-│   ├── pptx/                      #   Presentations
-│   ├── email-sender/              #   SMTP email
-│   ├── frontend-design/           #   UI generation
-│   ├── workflow-manager/          #   Task orchestration
-│   └── ...                        #   16 more skills
-│
+├── .opencode/
+│   ├── skills/                    # 24 skill packages (template source)
+│   └── tools/
+│       ├── memory.ts              # Cross-session memory tool
+│       └── scheduled-task.ts      # Scheduled task tool
 ├── smart-query-backend/           # FastAPI backend
 │   ├── app/
-│   │   ├── main.py                #   App entry + lifespan (auto-start opencode)
-│   │   ├── config.py              #   Environment config
-│   │   ├── database.py            #   MySQL operations + user/workspace CRUD
-│   │   ├── api/
-│   │   │   ├── auth.py            #   Login/logout/JWT
-│   │   │   ├── query.py           #   Query endpoints (stream + non-stream)
-│   │   │   ├── admin.py           #   Admin: users, models, opencode control
-│   │   │   ├── session.py         #   Session + task + notification endpoints
-│   │   │   └── internal.py        #   Internal API for AI tool calls
-│   │   ├── services/
-  │   │   │   ├── stream.py          #   SSE event collector + stream generator
-  │   │   │   ├── scheduler.py       #   APScheduler cron task scheduler
-  │   │   │   ├── task_executor.py   #   Silent task executor with SSE reasoning filter
-  │   │   │   ├── model_failover.py  #   Failover chain builder + prompt retry logic
-  │   │   │   ├── notif_stream.py    #   Notification SSE push dispatcher
-│   │   │   ├── opencode_client.py #   HTTP client for opencode API
-│   │   │   └── opencode_launcher.py #  Process management for opencode serve
-│   │   ├── core/
-│   │   │   └── auth.py            #   JWT token creation/validation
-│   │   └── models/                #   Pydantic request/response models
-│   ├── workspace/                 #   Per-user workspace directories
-│   │   └── {username}/            #     Created on user registration
-│   ├── config/                    #   Model config files
-│   ├── init_db.py                 #   Database initialization script
-│   └── requirements.txt
-│
- ├── smart-query-frontend/          # React + Vite frontend
-│   ├── src/
-│   │   ├── App.jsx                #   Router + layout
-│   │   ├── main.jsx               #   Entry point
-│   │   ├── pages/
-│   │   │   ├── LoginPage.jsx      #     Login form
-│   │   │   ├── SmartQueryPage.jsx #     Chat interface (main)
-│   │   │   └── AdminPage.jsx      #     Admin panel (users/models/opencode)
-│   │   ├── components/
-│   │   │   ├── ChatInput.jsx      #     Input + model selector + mobile bottom sheet
-│   │   │   ├── FileManager.jsx    #     File browser with preview/search/download
-│   │   │   ├── ToolPermissionManager.jsx #  Per-user tool deny/ask/allow
-│   │   │   ├── UsageStats.jsx     #     Usage charts + sortable tables
-│   │   │   ├── SkillManager.jsx   #     Admin skill management
-│   │   │   ├── UserSkillManager.jsx #   Per-user skill enable/disable
-│   │   │   ├── DiffViewer.jsx     #     File change viewer
-│   │   │   ├── HistoryDrawer.jsx  #     Conversation history
-  │   │   │   ├── ToolCall.jsx       #     Tool invocation display
-  │   │   │   ├── AssistantMessage.jsx #  Assistant message + undo/retry buttons
-  │   │   │   ├── MessageBubble.jsx  #     Chat message bubble
-│   │   │   ├── MarkdownRenderer.jsx #   Markdown + code highlighting
-│   │   │   ├── TaskManager.jsx    #     Scheduled task drawer with inline editing
-│   │   │   ├── NotificationBell.jsx #   Notification bell with read/unread tabs
-│   │   │   ├── TodoFloatPanel.jsx #    AI task progress float panel
-│   │   │   └── TableWithChart.jsx #     Recharts table component
-│   │   └── services/
-│   │       └── api.js             #     Axios API client + service objects
-│   └── package.json
-│
- ├── AGENTS.md                      # Developer guide for AI coding agents
-├── README.md                      # This file (English)
-├── README_CN.md                   # Chinese documentation
+│   │   ├── api/                   # auth, query, admin, session, internal
+│   │   ├── services/              # stream, memory, failover, scheduler, task_executor
+│   │   ├── core/                  # JWT auth
+│   │   └── models/                # Pydantic schemas
+│   ├── workspace/{username}/      # Per-user workspaces
+│   └── init_db.py
+├── smart-query-frontend/          # React + Vite + Ant Design
+│   └── src/
+│       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
+│       ├── components/            # ChatInput, MemoryViewer, TaskManager, FileManager, ...
+│       └── services/api.js
+├── AGENTS.md
+└── README.md
 ```
 
 ---
 
-## API Reference
+## API Overview
 
-### Authentication
+> Full interactive docs at `http://localhost:8000/docs` (Swagger UI)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth/login` | POST | Login, returns JWT token |
-| `/api/auth/logout` | POST | Logout |
-| `/api/auth/me` | GET | Get current user info |
+### User Endpoints
 
-### Query
+| Group | Key Endpoints |
+|-------|--------------|
+| **Auth** | `POST /api/auth/login`, `POST /api/auth/logout` |
+| **Query** | `POST /api/query/stream` (SSE), `POST /api/query/abort` |
+| **Sessions** | `GET /api/sessions`, `DELETE .../last-turn` (undo), `POST .../retry` |
+| **Memory** | `GET /api/memory` (read-only viewer) |
+| **Tasks** | `GET /api/tasks`, `PUT /api/tasks/{id}`, `POST .../toggle`, `POST .../run` |
+| **Files** | `GET /api/files`, `GET /api/files/content`, `GET /api/files/download` |
+| **Skills** | `GET /api/skills`, `PUT /api/skills/{name}` |
+| **Notifications** | `GET /api/notifications`, `GET /api/notifications/stream` (SSE) |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/query/stream` | POST | Streaming query (SSE), supports images + model selection |
-| `/api/query` | POST | Non-streaming query |
-| `/api/query/abort` | POST | Abort running query |
-| `/api/query/stream/reconnect` | GET | Reconnect to active SSE stream |
+### Admin Endpoints
 
-### Sessions
+| Group | Key Endpoints |
+|-------|--------------|
+| **Users** | CRUD + `POST .../init-workspace`, per-user model/tool/skill permissions |
+| **System** | `GET/PUT /api/admin/system-config`, `GET/PUT .../failover-chains` |
+| **opencode** | Status, start, restart, config, providers |
+| **Tools & Skills** | List, update, sync from workspace |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/sessions` | GET | List sessions (paginated) |
-| `/api/sessions/{id}/messages` | GET | Get session messages |
-| `/api/sessions/{id}/messages/last-turn` | DELETE | Undo last conversation turn (soft-delete) |
-| `/api/sessions/{id}/retry` | POST | Retry last turn (delete assistants, re-prompt via SSE) |
-| `/api/session/archive` | POST | Archive a session |
-| `/api/images/{image_id}` | GET | Get uploaded image |
-
-### Files
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/files` | GET | List workspace files (with pagination) |
-| `/api/files/content` | GET | Get file content for preview |
-| `/api/files/search` | GET | Search files by name pattern |
-| `/api/files/download` | GET | Download a file |
-
-### Skills (User-facing)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/skills` | GET | List available skills |
-| `/api/skills/{skill_name}` | PUT | Enable/disable a skill |
-| `/api/skills/sync` | POST | Sync skills from workspace |
-
-### Tasks (User)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/tasks` | GET | List current user's scheduled tasks |
-| `/api/tasks/{id}` | PUT | Update task (name, question, cron_expression) |
-| `/api/tasks/{id}/toggle` | POST | Enable or pause a task |
-| `/api/tasks/{id}/run` | POST | Manually trigger a task execution |
-
-### Notifications
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/notifications` | GET | List notifications (supports `?unread=true`) |
-| `/api/notifications/{id}/read` | POST | Mark a notification as read |
-| `/api/notifications/stream` | GET | SSE stream for real-time notifications (requires `?token=`) |
-
-### Admin
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/admin/users` | GET | List all users |
-| `/api/admin/users` | POST | Create user (+ auto-init workspace) |
-| `/api/admin/users/{id}` | PUT | Update user |
-| `/api/admin/users/{id}` | DELETE | Delete user |
-| `/api/admin/users/{id}/init-workspace` | POST | Initialize user workspace |
-| `/api/admin/users/{id}/models` | GET/PUT | Get/set user model permissions |
-| `/api/admin/users/{id}/tools/{tool_name}` | PUT/DELETE | Set/delete per-user tool permission |
-| `/api/admin/users/{id}/skills/{skill_name}` | PUT/DELETE | Set/delete per-user skill |
-| `/api/admin/models` | GET | List available models |
-| `/api/admin/tools` | GET | List all tools |
-| `/api/admin/tools/{tool_name}` | PUT | Update tool config |
-| `/api/admin/tools/sync` | POST | Sync tools from workspace |
-| `/api/admin/skills` | GET | List all skills |
-| `/api/admin/skills/{skill_name}` | PUT | Update skill config |
-| `/api/admin/skills/sync` | POST | Sync skills from workspace |
-| `/api/admin/opencode/providers` | GET | List AI providers |
-| `/api/admin/opencode/provider-auth` | GET | Get provider auth info |
-| `/api/admin/opencode/auth/{provider_id}` | PUT | Update provider auth |
-| `/api/admin/opencode/config` | GET/PATCH | Get/set opencode configuration |
-| `/api/admin/opencode/config/providers` | GET | Get provider config |
-| `/api/admin/opencode/status` | GET | Check opencode serve status |
-| `/api/admin/opencode/start` | POST | Start opencode serve |
-| `/api/admin/opencode/restart` | POST | Restart opencode serve |
-| `/api/admin/system-config` | GET/PUT | System configuration (default models, etc.) |
-| `/api/admin/failover-chains` | GET | Get all model failover chains |
-| `/api/admin/failover-chains` | PUT | Set failover chain for a model |
-| `/api/admin/failover-chains/{id}` | DELETE | Delete a failover chain rule |
-| `/api/admin/usage/stats` | GET | Get usage statistics |
-
-### Internal API
+### Internal API (AI Tools)
 
 > Requires `X-Internal-Token` header. Only accessible from `127.0.0.1`.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/internal/tasks` | GET | List tasks (by `directory` query param) |
-| `/api/internal/tasks` | POST | Create a scheduled task |
-| `/api/internal/tasks/{id}` | PUT | Update a task |
-| `/api/internal/tasks/{id}` | DELETE | Delete a task |
-| `/api/internal/tasks/{id}/pause` | POST | Pause a task |
-| `/api/internal/tasks/{id}/resume` | POST | Resume a paused task |
-| `/api/internal/tasks/{id}/run` | POST | Manually trigger a task |
-
----
-
-## Configuration
-
-### Backend Environment Variables (`smart-query-backend/.env`)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_HOST` | `127.0.0.1` | MySQL host |
-| `DB_USER` | `root` | MySQL user |
-| `DB_PASSWORD` | - | MySQL password |
-| `DB_NAME` | `ANALYSE` | Database name |
-| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | opencode serve URL |
-| `OPENCODE_USERNAME` | `opencode` | opencode auth username |
-| `OPENCODE_PASSWORD` | - | opencode auth password |
-| `JWT_SECRET_KEY` | - | JWT signing key |
-| `REDIS_HOST` | `localhost` | Redis host (optional, for JWT token cache) |
-| `REDIS_PORT` | `6379` | Redis port |
-| `REDIS_DB` | `0` | Redis database number |
-| `INTERNAL_API_SECRET` | - | Secret token for internal API calls |
-
-### Frontend Environment Variables (`smart-query-frontend/.env`)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VITE_API_BASE_URL` | `/api` | Backend API base URL |
-
-### Admin Panel Configuration
-
-Configured via the admin UI (`/admin`):
-
-- **opencode service**: work directory, credentials, auto-start toggle
-- **Default models**: set default build/plan/task models
-- **Model failover**: configure fallback chains per model + global fallback model
-- **Model permissions**: per-user allowed models with monthly usage limits
-- **Provider API keys**: manage AI provider credentials
+| Group | Endpoints |
+|-------|-----------|
+| **Tasks** | CRUD + pause/resume/run (`/api/internal/tasks/*`) |
+| **Memory** | `POST /memory/save`, `GET /memory/read`, `GET /memory/search` |
 
 ---
 
 ## Per-User Workspaces
 
-Each user gets an isolated workspace at `smart-query-backend/workspace/{username}/`:
-
 ```
 workspace/{username}/
 ├── .opencode/
-│   └── skills/           # User's skill set (copied from template on creation)
-│       ├── pdf/
-│       ├── xlsx/
-│       └── ...
-├── AGENTS.md             # Agent instructions for this workspace
+│   ├── skills/           # Skill packages (copied from template)
+│   └── tools/            # Custom tools (memory.ts, scheduled-task.ts)
+├── MEMORY.md             # AI-managed facts memory
+├── USER.md               # AI-managed user preferences
+├── AGENTS.md             # Agent instructions
 └── README.md
 ```
 
-**How it works:**
+- Backend creates opencode sessions with `?directory={workspace_path}`
+- opencode treats each workspace as a separate project, loading its own skills, tools, and config
+- Admin "Initialize Workspace" copies `.opencode/`, `AGENTS.md`, creates `MEMORY.md` + `USER.md`
 
-1. When a user sends a query, the backend creates an opencode session with `POST /session?directory={workspace_path}`
-2. The `prompt_async` and `global/event` APIs also receive `?directory=` to ensure opencode loads the correct project
-3. opencode identifies each workspace as a separate project via the directory path, loading its own skills and config
-4. Different users can have different skill sets by modifying their workspace's `.opencode/skills/`
+---
+
+## Configuration
+
+### Backend (`.env`)
+
+```bash
+DB_HOST=127.0.0.1      DB_USER=root       DB_PASSWORD=***      DB_NAME=ANALYSE
+OPENCODE_BASE_URL=http://127.0.0.1:4096
+OPENCODE_USERNAME=opencode   OPENCODE_PASSWORD=***
+JWT_SECRET_KEY=***
+REDIS_HOST=localhost   REDIS_PORT=6379      REDIS_DB=0
+INTERNAL_API_SECRET=***   # Required for memory & task tools
+```
+
+### Admin Panel (`/admin`)
+
+- **opencode service**: work directory, credentials, auto-start
+- **Default models**: separate build/plan/task defaults
+- **Model failover**: per-model fallback chain + global fallback
+- **Model permissions**: per-user allowed models with monthly limits
+- **Tool permissions**: per-user deny/ask/allow for each tool (including memory tools)
 
 ---
 
 ## Development
 
-### Backend
-
 ```bash
-cd smart-query-backend
+# Backend (with auto-reload)
+cd smart-query-backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Development with auto-reload
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Frontend
+cd smart-query-frontend && npm run dev      # Dev server
+npm run build                               # Production build
 
 # Syntax check
-python -m py_compile app/api/admin.py
 python -m py_compile app/services/stream.py
 
-# Lint
-ruff check app/
-ruff format app/
+# Database migration
+python init_db.py
 ```
-
-### Frontend
-
-```bash
-cd smart-query-frontend
-
-# Development
-npm run dev
-
-# Production build
-npm run build
-
-# Preview production build
-npm run preview
-```
-
-### Database Migrations
-
-```bash
-cd smart-query-backend
-python init_db.py          # Initialize or update database
-```
-
----
-
-## Troubleshooting
-
-### opencode serve not responding
-
-```bash
-# Check if opencode is running
-curl -u opencode:yourpassword http://localhost:4096/global/health
-
-# Check backend health (includes opencode status)
-curl http://localhost:8000/api/health
-
-# View backend logs
-tail -f /tmp/backend.log
-```
-
-### Workspace not loading correct skills
-
-- Verify `workspace/{username}/.opencode/skills/` exists and has content
-- Check database `users.workspace_path` matches the actual directory
-- Use the "Initialize Workspace" button in admin panel for users without workspaces
-
-### Frontend can't reach backend
-
-```bash
-# Check .env configuration
-cat smart-query-frontend/.env
-
-# Verify backend is running
-curl http://localhost:8000/
-```
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
 ---
 
