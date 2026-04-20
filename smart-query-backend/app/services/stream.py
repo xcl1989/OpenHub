@@ -12,6 +12,7 @@ from app import database
 from app.services.opencode_client import opencode_client
 from app.services.model_failover import try_prompt_with_failover
 from app.services import memory
+from app.services import git_snapshot as git_snap
 from app.models.query import ImageData
 
 logger = logging.getLogger(__name__)
@@ -515,6 +516,37 @@ async def _background_collector(
             await queue.put(
                 f"data: {json.dumps({'type': 'message_complete', 'message_id': last_message_id, 'done': True})}\n\n"
             )
+
+            try:
+                ws_path = workspace_path if workspace_path else None
+                if ws_path and user_id:
+                    has_repo = await asyncio.to_thread(git_snap.is_git_repo, ws_path)
+                    if not has_repo:
+                        await asyncio.to_thread(git_snap.init_git_repo, ws_path)
+
+                    changed = await asyncio.to_thread(git_snap.has_changes, ws_path)
+                    if changed:
+                        diff_summary = await asyncio.to_thread(git_snap.get_diff_summary, ws_path)
+                        commit_hash = await asyncio.to_thread(
+                            git_snap.create_snapshot,
+                            ws_path, session_id, turn_id, question, diff_summary,
+                        )
+                        if commit_hash:
+                            await asyncio.to_thread(
+                                database.save_git_snapshot,
+                                user_id, session_id, turn_id, commit_hash,
+                                question[:500], diff_summary, len(diff_summary),
+                            )
+                            await asyncio.to_thread(
+                                _write_log, log_file,
+                                f"[INFO] Git snapshot: {commit_hash[:8]} ({len(diff_summary)} files)\n",
+                            )
+            except Exception as snap_err:
+                await asyncio.to_thread(
+                    _write_log, log_file,
+                    f"[WARN] Git snapshot skipped: {snap_err}\n",
+                )
+
             await queue.put(
                 f"data: {json.dumps({'type': 'session_idle', 'done': False})}\n\n"
             )

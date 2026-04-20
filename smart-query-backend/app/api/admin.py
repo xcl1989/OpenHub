@@ -93,6 +93,9 @@ def _init_user_workspace(username: str) -> str:
         if not p.exists():
             p.write_text(default_content, encoding="utf-8")
 
+    from app.services import git_snapshot
+    git_snapshot.init_git_repo(str(ws_path))
+
     return str(ws_path)
 
 

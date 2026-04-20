@@ -682,4 +682,29 @@ export const memoryService = {
   },
 };
 
+export const snapshotService = {
+  list: async (page = 1, pageSize = 20, sessionId = null) => {
+    const params = { page, page_size: pageSize };
+    if (sessionId) params.session_id = sessionId;
+    const response = await apiClient.get('/snapshots', { params });
+    return response.data;
+  },
+  getDetail: async (commitHash) => {
+    const response = await apiClient.get(`/snapshots/${commitHash}`);
+    return response.data;
+  },
+  getFile: async (commitHash, path) => {
+    const response = await apiClient.get(`/snapshots/${commitHash}/file`, { params: { path } });
+    return response.data;
+  },
+  restoreAll: async (commitHash) => {
+    const response = await apiClient.post(`/snapshots/${commitHash}/restore`);
+    return response.data;
+  },
+  restoreFile: async (commitHash, path) => {
+    const response = await apiClient.post(`/snapshots/${commitHash}/restore-file`, { path });
+    return response.data;
+  },
+};
+
 export default apiClient;

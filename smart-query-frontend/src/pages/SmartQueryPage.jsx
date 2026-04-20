@@ -38,7 +38,8 @@ import {
   SwapOutlined,
   ThunderboltOutlined,
   ClockCircleOutlined,
-  BookOutlined
+  BookOutlined,
+  RollbackOutlined
 } from '@ant-design/icons';
 import { queryDataService, authService, clearAuthToken, diffService } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -52,6 +53,7 @@ import UserSkillManager from '../components/UserSkillManager';
 import TaskManager from '../components/TaskManager';
 import NotificationBell from '../components/NotificationBell';
 import MemoryViewer from '../components/MemoryViewer';
+import GitTimeMachine from '../components/GitTimeMachine';
 import TodoFloatPanel from '../components/TodoFloatPanel';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
@@ -102,6 +104,7 @@ const SmartQueryPage = () => {
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [taskManagerVisible, setTaskManagerVisible] = useState(false);
   const [memoryViewerVisible, setMemoryViewerVisible] = useState(false);
+  const [timeMachineVisible, setTimeMachineVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
@@ -1215,8 +1218,26 @@ const SmartQueryPage = () => {
           }
           
           if (data.type === 'question.asked') {
-            pendingQuestionIdRef.current = data.id;
-            console.log('[question.asked] questionId:', data.id);
+            const realId = data.id;
+            pendingQuestionIdRef.current = realId;
+            console.log('[question.asked] questionId:', realId);
+
+            setMessages(prev => prev.map(msg => {
+              if (msg.tools) {
+                let updated = false;
+                const newTools = {};
+                for (const [key, tool] of Object.entries(msg.tools)) {
+                  if (tool.tool === 'question' && (tool.state === 'running' || !tool.state)) {
+                    newTools[key] = { ...tool, questionId: realId };
+                    updated = true;
+                  } else {
+                    newTools[key] = tool;
+                  }
+                }
+                return updated ? { ...msg, tools: newTools } : msg;
+              }
+              return msg;
+            }));
           }
 
           if (data.type === 'model_failover') {
@@ -1598,6 +1619,13 @@ const SmartQueryPage = () => {
         isMobile={isMobile}
       />
 
+      <GitTimeMachine
+        open={timeMachineVisible}
+        onClose={() => setTimeMachineVisible(false)}
+        isMobile={isMobile}
+        currentSessionId={conversationId}
+      />
+
       {/* 归档确认 Modal */}
       <Modal
         title="确认归档"
@@ -1801,6 +1829,7 @@ const SmartQueryPage = () => {
           icon={<HistoryOutlined />}
           onClick={() => {
             setTaskManagerVisible(false);
+            setTimeMachineVisible(false);
             setHistoryDrawerVisible(true);
           }}
           size="small"
@@ -1814,6 +1843,7 @@ const SmartQueryPage = () => {
           onClick={() => {
             setSkillManagerVisible(false);
             setTaskManagerVisible(false);
+            setTimeMachineVisible(false);
             setFileManagerVisible(true);
           }}
           size="small"
@@ -1840,6 +1870,7 @@ const SmartQueryPage = () => {
             setFileManagerVisible(false);
             setTaskManagerVisible(false);
             setMemoryViewerVisible(false);
+            setTimeMachineVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1852,6 +1883,7 @@ const SmartQueryPage = () => {
           icon={<ClockCircleOutlined />}
           onClick={() => {
             setSkillManagerVisible(false);
+            setTimeMachineVisible(false);
             setTaskManagerVisible(true);
           }}
           size="small"
@@ -1865,6 +1897,7 @@ const SmartQueryPage = () => {
           onClick={() => {
             setSkillManagerVisible(false);
             setTaskManagerVisible(false);
+            setTimeMachineVisible(false);
             setMemoryViewerVisible(true);
           }}
           size="small"
@@ -1872,6 +1905,20 @@ const SmartQueryPage = () => {
           title="记忆"
         >
           <span className="toolbar-btn-text">记忆</span>
+        </Button>
+        <Button
+          icon={<RollbackOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setMemoryViewerVisible(false);
+            setTimeMachineVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="时光机"
+        >
+          <span className="toolbar-btn-text">时光机</span>
         </Button>
         <NotificationBell />
       </div>

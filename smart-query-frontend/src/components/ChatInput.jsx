@@ -38,7 +38,8 @@ function ModelSelect({ model, setModel, agent }) {
         const groups = {};
         const map = {};
         for (const m of models) {
-          map[m.modelID] = m;
+          const uniqueKey = `${m.providerID}|${m.modelID}`;
+          map[uniqueKey] = m;
           const groupKey = m.providerID;
           if (!groups[groupKey]) {
             groups[groupKey] = {
@@ -47,7 +48,7 @@ function ModelSelect({ model, setModel, agent }) {
             };
           }
           groups[groupKey].options.push({
-            value: m.modelID,
+            value: uniqueKey,
             label: m.name || m.modelID,
           });
         }
@@ -73,12 +74,12 @@ function ModelSelect({ model, setModel, agent }) {
     }
   }, [agent]);
 
-  const handleChange = (modelID) => {
-    if (!modelID) {
+  const handleChange = (uniqueKey) => {
+    if (!uniqueKey) {
       setModel(null);
       return;
     }
-    const m = modelsMapRef.current[modelID];
+    const m = modelsMapRef.current[uniqueKey];
     if (m) {
       setModel({
         modelID: m.modelID,
@@ -97,7 +98,7 @@ function ModelSelect({ model, setModel, agent }) {
     setSearchText('');
   };
 
-  const selectValue = model ? (model.modelID || model) : undefined;
+  const selectValue = model ? `${model.providerID}|${model.modelID}` : undefined;
 
   const allModels = [];
   const groupMap = {};

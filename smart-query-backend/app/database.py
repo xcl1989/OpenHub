@@ -1119,6 +1119,128 @@ def sync_tools_from_opencode() -> list:
     return list(builtin_tools.keys())
 
 
+def save_git_snapshot(
+    user_id: int,
+    session_id: str,
+    turn_id: str,
+    commit_hash: str,
+    commit_message: str,
+    diff_summary: list,
+    files_changed: int = 0,
+    is_auto_restore: bool = False,
+) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO git_snapshots
+                       (user_id, session_id, turn_id, commit_hash, commit_message,
+                        diff_summary, files_changed, is_auto_restore)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        user_id,
+                        session_id,
+                        turn_id,
+                        commit_hash,
+                        commit_message[:500],
+                        json.dumps(diff_summary),
+                        files_changed,
+                        1 if is_auto_restore else 0,
+                    ),
+                )
+        return True
+    except Exception as e:
+        print(f"保存快照失败：{e}")
+        return False
+
+
+def get_git_snapshots(
+    user_id: int, limit: int = 20, offset: int = 0, session_id: str = None
+) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                if session_id:
+                    cursor.execute(
+                        """SELECT s.id, s.session_id, s.turn_id, s.commit_hash,
+                                  s.commit_message, s.diff_summary, s.files_changed,
+                                  s.is_auto_restore, s.created_at,
+                                  cs.title as session_title
+                           FROM git_snapshots s
+                           LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
+                           WHERE s.user_id = %s AND s.session_id = %s
+                           ORDER BY s.created_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, session_id, limit, offset),
+                    )
+                else:
+                    cursor.execute(
+                        """SELECT s.id, s.session_id, s.turn_id, s.commit_hash,
+                                  s.commit_message, s.diff_summary, s.files_changed,
+                                  s.is_auto_restore, s.created_at,
+                                  cs.title as session_title
+                           FROM git_snapshots s
+                           LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
+                           WHERE s.user_id = %s
+                           ORDER BY s.created_at DESC
+                           LIMIT %s OFFSET %s""",
+                        (user_id, limit, offset),
+                    )
+                rows = cursor.fetchall()
+                result = []
+                for row in rows:
+                    result.append({
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "turn_id": row["turn_id"],
+                        "commit_hash": row["commit_hash"],
+                        "commit_message": row["commit_message"],
+                        "diff_summary": json.loads(row["diff_summary"]) if row["diff_summary"] else [],
+                        "files_changed": row["files_changed"],
+                        "is_auto_restore": row["is_auto_restore"],
+                        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                        "session_title": row["session_title"],
+                    })
+                return result
+    except Exception as e:
+        print(f"获取快照列表失败：{e}")
+        return []
+
+
+def get_git_snapshot_by_hash(commit_hash: str, user_id: int) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT s.id, s.session_id, s.turn_id, s.commit_hash,
+                              s.commit_message, s.diff_summary, s.files_changed,
+                              s.is_auto_restore, s.created_at,
+                              cs.title as session_title
+                       FROM git_snapshots s
+                       LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
+                       WHERE s.commit_hash = %s AND s.user_id = %s""",
+                    (commit_hash, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "session_id": row["session_id"],
+                    "turn_id": row["turn_id"],
+                    "commit_hash": row["commit_hash"],
+                    "commit_message": row["commit_message"],
+                    "diff_summary": json.loads(row["diff_summary"]) if row["diff_summary"] else [],
+                    "files_changed": row["files_changed"],
+                    "is_auto_restore": row["is_auto_restore"],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "session_title": row["session_title"],
+                }
+    except Exception as e:
+        print(f"获取快照失败：{e}")
+        return None
+
+
 def get_all_skills() -> list:
     try:
         with get_db_connection() as conn:

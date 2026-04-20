@@ -2,7 +2,7 @@
 
 # OpenHub
 
-> An enterprise-grade multi-user AI platform built on [opencode](https://opencode.ai), with user management, model access control, per-user workspaces, cross-session memory, and 24+ modular skills.
+> An enterprise-grade multi-user AI platform built on [opencode](https://opencode.ai). One opencode instance, isolated workspaces, persistent memory, and full version control — for every user.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
@@ -12,116 +12,90 @@
 
 ---
 
-## Features
+## Highlights
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-user Management** | User CRUD, role-based admin, JWT authentication |
-| **Per-user Workspaces** | Isolated directories with independent `.opencode/skills/` + `.opencode/tools/` |
-| **Model Access Control** | Per-user model permissions with monthly usage limits |
-| **Cross-session Memory** | AI auto-saves facts & preferences per user; context injected into every prompt |
-| **Model Failover** | Configurable fallback chain per model + global fallback; auto-switches on failure |
-| **Scheduled Tasks** | Cron-based task scheduling via UI or AI chat, with edit/pause/resume controls |
-| **Undo & Retry** | Undo last turn or retry with same prompt; soft-delete + opencode sync |
-| **Real-time Streaming** | SSE-based streaming with tool call and reasoning display |
-| **Tool Permissions** | Per-user deny/ask/allow control for AI tools |
-| **File Browser** | Browse, preview, search, and download workspace files |
-| **24 Modular Skills** | PDF, Excel, Word, PPT, email, news, frontend design, data analytics, and more |
-| **Mobile Responsive** | Full mobile-optimized UI with bottom sheets and touch-friendly controls |
+**Multi-user Architecture** — A single `opencode serve` instance serves all users. Each user gets an isolated workspace directory, injected via `?directory=` per session. Independent skills, tools, model permissions, and usage limits per user.
+
+**Cross-session Memory** — The AI remembers. It auto-saves project facts and user preferences to Markdown files in the workspace. On every new conversation, memory context is silently injected into the prompt — no repeated instructions needed.
+
+**Git Time Machine** — Every workspace is a git repo. Each conversation turn auto-commits a snapshot. Users can browse changes, view diffs, and undo any modification with one click. Current state is always auto-saved before undo.
+
+**Scheduled Tasks** — Create cron-based tasks via chat or UI. The AI sets up the schedule, executes tasks on time, and notifies users of results. Supports edit, pause, resume, and manual trigger.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       OpenHub Agent Platform                      │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌──────────────────┐     ┌──────────────────┐                   │
-│  │   React Frontend  │────▶│   FastAPI Backend │                   │
-│  │  Vite + Ant Design│◀────│   (SSE Streaming) │                   │
-│  └──────────────────┘     └────────┬─────────┘                   │
-│                                    │                              │
-│                           ┌────────▼─────────┐                   │
-│                           │  opencode serve    │                   │
-│                           │  (:4096, single)  │                   │
-│                           └────────┬─────────┘                   │
-│                                    │ ?directory=                  │
-│                    ┌───────────────┼───────────────┐              │
-│                    ▼               ▼               ▼              │
-│           ┌──────────────┐ ┌──────────────┐ ┌──────────────┐     │
-│           │  workspace/  │ │  workspace/  │ │  workspace/  │     │
-│           │   admin/     │ │  testuser/   │ │  newuser/    │     │
-│           │ ┌──────────┐ │ │ ┌──────────┐ │ │ ┌──────────┐ │     │
-│           │ │.opencode/ │ │ │ │.opencode/ │ │ │ │.opencode/ │ │     │
-│           │ │├─skills/  │ │ │ │├─skills/  │ │ │ │├─skills/  │ │     │
-│           │ │└─tools/   │ │ │ │└─tools/   │ │ │ │└─tools/   │ │     │
-│           │ │ MEMORY.md │ │ │ │ MEMORY.md │ │ │ │ MEMORY.md │ │     │
-│           │ │ USER.md   │ │ │ │ USER.md   │ │ │ │ USER.md   │ │     │
-│           │ └──────────┘ │ │ └──────────┘ │ │ └──────────┘ │     │
-│           └──────────────┘ └──────────────┘ └──────────────┘     │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  MySQL: users · sessions · messages · permissions · usage    │  │
-│  │  tasks · notifications · failover_chains · tool_permissions  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+ Frontend (:3000)  ──▶  Backend (:8000)  ──▶  opencode serve (:4096)
+                                              ┌──── ?directory= ────┐
+                                              │                      │
+                                     workspace/admin/       workspace/alice/
+                                     ├── .opencode/         ├── .opencode/
+                                     │   ├── skills/        │   ├── skills/
+                                     │   └── tools/         │   └── tools/
+                                     ├── MEMORY.md          ├── MEMORY.md
+                                     ├── USER.md            ├── USER.md
+                                     └── (git repo)         └── (git repo)
+
+ MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks
 ```
 
-### Key Design Decisions
+Key design: backend proxies all requests through one opencode instance, using `?directory={workspace_path}` to isolate users. Each workspace has its own skills, tools, memory files, and git history.
 
-- **Single opencode instance** on `:4096` shared by all users; session-level `?directory=` isolates workspaces
-- Each workspace has independent `.opencode/skills/` and `.opencode/tools/`
-- **Model Failover** auto-retries with configured fallback models on `prompt_async` failure
-- **Undo/Retry** uses soft-delete (`visible=0`) in DB + opencode message deletion
-- **Content timeout** detects hung models (60s no-content) and returns error to frontend
+Plus: model failover chains, scheduled tasks (cron), SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
 
 ---
 
-## Cross-session Memory System
-
-Memory gives each user persistent context across conversations — the AI remembers project details, preferences, and work progress without being asked again.
-
-### How it works
+## Cross-session Memory
 
 ```
-User chats → AI decides info is worth remembering
-                ↓
-         memory_save tool (opencode)
-                ↓
-      Writes to workspace MEMORY.md / USER.md
-                ↓
-build_memory_context() reads files on next prompt
-                ↓
-      Context prepended to user's question
+ User chats → AI decides info is worth remembering
+                      ↓
+               memory_save tool (opencode custom tool)
+                      ↓
+          Writes to workspace MEMORY.md or USER.md
+                      ↓
+    build_memory_context() on next prompt reads the files
+                      ↓
+          Memory context silently prepended to user's question
 ```
 
-### Two memory types
+| File | Type | What the AI remembers |
+|------|------|-----------------------|
+| `MEMORY.md` | Facts | Project background, work progress, technical decisions, codebase structure |
+| `USER.md` | Preferences | Communication style, language, workflow habits |
 
-| File | Type | Content |
-|------|------|---------|
-| `MEMORY.md` | Facts | Project background, work progress, technical decisions, codebase discoveries |
-| `USER.md` | Preferences | Communication style, language preferences, workflow habits |
+- **Storage**: plain Markdown in user workspace — git-friendly, human-readable
+- **Write**: AI calls `memory_save` via opencode custom tool (`.opencode/tools/memory.ts`)
+- **Read**: auto-injected into every prompt via `build_memory_context()` (max 2000 chars)
+- **Scheduled tasks**: memory context also injected into task prompts
+- **Frontend**: read-only viewer (Drawer), admin can enable/disable per user
 
-### Architecture
+---
 
-- **Storage**: Plain markdown files in user workspace (works with git, human-readable)
-- **Write**: AI calls `memory_save` tool (registered as opencode custom tool in `.opencode/tools/memory.ts`)
-- **Read**: Every prompt auto-injects memory context via `build_memory_context()` (max 2000 chars)
-- **Frontend**: Read-only viewer (Drawer) — users can view but not edit directly
-- **Admin**: Memory tools appear in Tool Permission Manager, can be enabled/disabled per user
-- **Scheduled tasks**: Memory context is also injected into task prompts
+## Git Time Machine
 
-### Backend components
+```
+ Conversation turn completes
+         ↓
+ Auto git add + commit (only if files changed)
+         ↓
+ git_snapshots table records hash, session, diff summary
+         ↓
+ User opens Time Machine → browses snapshots, views diffs
+         ↓
+ Click "Undo this change" → git checkout {hash}^ → files revert
+         ↓
+ Auto-save commit created (current state preserved)
+```
 
-| File | Role |
-|------|------|
-| `app/services/memory.py` | Core: `build_memory_context()`, `save_memory()`, `read_memory()`, `search_memory()` |
-| `app/api/internal.py` | Internal endpoints: `/memory/save`, `/memory/read`, `/memory/search` |
-| `app/api/session.py` | User endpoint: `GET /api/memory` (read-only) |
-| `.opencode/tools/memory.ts` | opencode tool: `memory_save` + `memory_recall` |
-| `app/components/MemoryViewer.jsx` | Frontend: read-only drawer with tabs |
+- Every workspace is auto-initialized as a git repo on creation
+- Snapshots are taken after each conversation turn and scheduled task
+- **"Undo" reverts to parent commit** — the workspace goes back to the state before that change was made
+- First commit (workspace init) cannot be undone — button is disabled in UI
+- Supports undo all files or a single file
+- Undo always auto-saves current state first (no data loss)
 
 ---
 
@@ -130,8 +104,8 @@ build_memory_context() reads files on next prompt
 ```bash
 # 1. Clone and configure
 git clone <repo-url> && cd OpenHub
-cp smart-query-backend/.env.example smart-query-backend/.env   # Edit with MySQL creds, JWT secret
-cp smart-query-frontend/.env.example smart-query-frontend/.env # Edit API URL
+cp smart-query-backend/.env.example smart-query-backend/.env   # MySQL creds, JWT secret
+cp smart-query-frontend/.env.example smart-query-frontend/.env
 
 # 2. Install dependencies
 cd smart-query-backend && pip install -r requirements.txt
@@ -140,12 +114,12 @@ cd ../smart-query-frontend && npm install
 # 3. Initialize database
 cd ../smart-query-backend && python init_db.py
 
-# 4. Start services
+# 4. Start
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # Backend (auto-starts opencode)
 cd ../smart-query-frontend && npm run dev                      # Frontend
 ```
 
-Access: **Frontend** http://localhost:3000 · **API Docs** http://localhost:8000/docs · Default login: `admin`/`admin`
+Access: **Frontend** http://localhost:3000 · **API Docs** http://localhost:8000/docs
 
 Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, [opencode](https://opencode.ai) 1.4+
 
@@ -175,113 +149,46 @@ OpenHub/
 ├── smart-query-backend/           # FastAPI backend
 │   ├── app/
 │   │   ├── api/                   # auth, query, admin, session, internal
-│   │   ├── services/              # stream, memory, failover, scheduler, task_executor
-│   │   ├── core/                  # JWT auth
-│   │   └── models/                # Pydantic schemas
+│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler
+│   │   └── core/                  # JWT auth
 │   ├── workspace/{username}/      # Per-user workspaces
 │   └── init_db.py
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, TaskManager, FileManager, ...
+│       ├── components/            # ChatInput, MemoryViewer, GitTimeMachine, ...
 │       └── services/api.js
-├── AGENTS.md
-└── README.md
+└── AGENTS.md
 ```
-
----
-
-## API Overview
-
-> Full interactive docs at `http://localhost:8000/docs` (Swagger UI)
-
-### User Endpoints
-
-| Group | Key Endpoints |
-|-------|--------------|
-| **Auth** | `POST /api/auth/login`, `POST /api/auth/logout` |
-| **Query** | `POST /api/query/stream` (SSE), `POST /api/query/abort` |
-| **Sessions** | `GET /api/sessions`, `DELETE .../last-turn` (undo), `POST .../retry` |
-| **Memory** | `GET /api/memory` (read-only viewer) |
-| **Tasks** | `GET /api/tasks`, `PUT /api/tasks/{id}`, `POST .../toggle`, `POST .../run` |
-| **Files** | `GET /api/files`, `GET /api/files/content`, `GET /api/files/download` |
-| **Skills** | `GET /api/skills`, `PUT /api/skills/{name}` |
-| **Notifications** | `GET /api/notifications`, `GET /api/notifications/stream` (SSE) |
-
-### Admin Endpoints
-
-| Group | Key Endpoints |
-|-------|--------------|
-| **Users** | CRUD + `POST .../init-workspace`, per-user model/tool/skill permissions |
-| **System** | `GET/PUT /api/admin/system-config`, `GET/PUT .../failover-chains` |
-| **opencode** | Status, start, restart, config, providers |
-| **Tools & Skills** | List, update, sync from workspace |
-
-### Internal API (AI Tools)
-
-> Requires `X-Internal-Token` header. Only accessible from `127.0.0.1`.
-
-| Group | Endpoints |
-|-------|-----------|
-| **Tasks** | CRUD + pause/resume/run (`/api/internal/tasks/*`) |
-| **Memory** | `POST /memory/save`, `GET /memory/read`, `GET /memory/search` |
-
----
-
-## Per-User Workspaces
-
-```
-workspace/{username}/
-├── .opencode/
-│   ├── skills/           # Skill packages (copied from template)
-│   └── tools/            # Custom tools (memory.ts, scheduled-task.ts)
-├── MEMORY.md             # AI-managed facts memory
-├── USER.md               # AI-managed user preferences
-├── AGENTS.md             # Agent instructions
-└── README.md
-```
-
-- Backend creates opencode sessions with `?directory={workspace_path}`
-- opencode treats each workspace as a separate project, loading its own skills, tools, and config
-- Admin "Initialize Workspace" copies `.opencode/`, `AGENTS.md`, creates `MEMORY.md` + `USER.md`
 
 ---
 
 ## Configuration
 
-### Backend (`.env`)
+**Backend** (`smart-query-backend/.env`):
 
 ```bash
-DB_HOST=127.0.0.1      DB_USER=root       DB_PASSWORD=***      DB_NAME=ANALYSE
+DB_HOST=127.0.0.1    DB_USER=root    DB_PASSWORD=***    DB_NAME=ANALYSE
 OPENCODE_BASE_URL=http://127.0.0.1:4096
-OPENCODE_USERNAME=opencode   OPENCODE_PASSWORD=***
+OPENCODE_USERNAME=opencode    OPENCODE_PASSWORD=***
 JWT_SECRET_KEY=***
-REDIS_HOST=localhost   REDIS_PORT=6379      REDIS_DB=0
-INTERNAL_API_SECRET=***   # Required for memory & task tools
+REDIS_HOST=localhost    REDIS_PORT=6379    REDIS_DB=0
+INTERNAL_API_SECRET=***    # Required for memory & task tools
 ```
 
-### Admin Panel (`/admin`)
-
-- **opencode service**: work directory, credentials, auto-start
-- **Default models**: separate build/plan/task defaults
-- **Model failover**: per-model fallback chain + global fallback
-- **Model permissions**: per-user allowed models with monthly limits
-- **Tool permissions**: per-user deny/ask/allow for each tool (including memory tools)
+**Admin Panel** (`/admin`): user CRUD, workspace init, model/tool/skill permissions per user, model failover chains, opencode service management.
 
 ---
 
 ## Development
 
 ```bash
-# Backend (with auto-reload)
+# Backend (auto-reload)
 cd smart-query-backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend
 cd smart-query-frontend && npm run dev      # Dev server
 npm run build                               # Production build
-
-# Syntax check
-python -m py_compile app/services/stream.py
 
 # Database migration
 python init_db.py

@@ -231,6 +231,24 @@ TABLES = {
             INDEX idx_primary (primary_model_id, primary_provider_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "git_snapshots": """
+        CREATE TABLE IF NOT EXISTS git_snapshots (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            session_id VARCHAR(128) COLLATE utf8mb4_unicode_ci,
+            turn_id VARCHAR(64),
+            commit_hash VARCHAR(40) NOT NULL,
+            commit_message TEXT,
+            diff_summary JSON,
+            files_changed INT DEFAULT 0,
+            is_auto_restore TINYINT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_created (user_id, created_at DESC),
+            INDEX idx_session (session_id),
+            INDEX idx_turn (turn_id),
+            INDEX idx_commit_hash (commit_hash)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -314,6 +332,7 @@ def init_database():
             "CREATE INDEX idx_turn_id ON conversation_messages(turn_id)",
             "CREATE INDEX idx_session_visible ON conversation_messages(session_id, visible)",
             "ALTER TABLE tool_permissions MODIFY COLUMN risk_level ENUM('safe', 'moderate', 'dangerous', 'custom') DEFAULT 'safe'",
+            "ALTER TABLE git_snapshots MODIFY COLUMN session_id VARCHAR(128) COLLATE utf8mb4_unicode_ci",
         ]
         for sql in MIGRATIONS:
             try:

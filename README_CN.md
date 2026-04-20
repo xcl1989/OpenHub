@@ -2,7 +2,7 @@
 
 # OpenHub
 
-> 基于 [opencode](https://opencode.ai) 构建的企业级多用户 AI 平台，支持用户管理、模型权限控制、独立工作空间、跨会话记忆和 24+ 模块化技能。
+> 基于 [opencode](https://opencode.ai) 构建的企业级多用户 AI 平台。单实例 opencode、用户隔离工作空间、跨会话记忆、完整版本控制。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
@@ -12,116 +12,90 @@
 
 ---
 
-## 平台特性
+## 核心亮点
 
-| 特性 | 说明 |
-|------|------|
-| **多用户管理** | 用户增删改查、角色管理、JWT 认证 |
-| **独立工作空间** | 每用户独立目录，隔离 `.opencode/skills/` + `.opencode/tools/` |
-| **模型权限控制** | 按用户配置可用模型，支持月调用次数限制 |
-| **跨会话记忆** | AI 自动保存事实与偏好，每次对话自动注入上下文 |
-| **模型兜底** | 可配置每模型的 fallback chain + 全局兜底模型，失败自动切换 |
-| **定时任务** | 通过 UI 或 AI 对话创建 cron 任务，支持编辑/暂停/恢复 |
-| **撤销与重试** | 撤销最后一轮或用相同 prompt 重试；软删除 + opencode 同步 |
-| **实时流式响应** | SSE 流式输出，支持工具调用和推理过程展示 |
-| **工具权限管理** | 按用户配置工具的拒绝/询问/允许权限 |
-| **文件管理器** | 浏览、预览、搜索、下载工作空间文件 |
-| **24 个技能包** | PDF、Excel、Word、PPT、邮件、新闻、前端设计、数据分析等 |
-| **移动端适配** | 完整移动端优化 UI，底部面板、触摸友好 |
+**多用户架构** — 单个 `opencode serve` 实例服务所有用户。每个用户拥有独立工作空间目录，通过 `?directory=` 按会话隔离。独立的技能包、工具、模型权限和用量限制。
+
+**跨会话记忆** — AI 会记住你。自动将项目事实和用户偏好保存为工作空间中的 Markdown 文件。每次新对话时，记忆上下文自动注入 prompt——无需反复说明。
+
+**Git 时光机** — 每个工作空间都是 git 仓库。每轮对话自动提交快照。用户可以浏览变更、查看 diff、一键撤销任意修改。撤销前自动保存当前状态，不丢失任何内容。
+
+**定时任务** — 通过对话或 UI 创建 cron 定时任务。AI 自动设置调度、按时执行、结果通知用户。支持编辑、暂停、恢复和手动触发。
 
 ---
 
 ## 系统架构
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                       OpenHub Agent 平台                          │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌──────────────────┐     ┌──────────────────┐                   │
-│  │   React 前端      │────▶│   FastAPI 后端    │                   │
-│  │  Vite + Ant Design│◀────│   (SSE 流式响应)   │                   │
-│  └──────────────────┘     └────────┬─────────┘                   │
-│                                    │                              │
-│                           ┌────────▼─────────┐                   │
-│                           │  opencode serve    │                   │
-│                           │  (:4096, 单实例)   │                   │
-│                           └────────┬─────────┘                   │
-│                                    │ ?directory=                  │
-│                    ┌───────────────┼───────────────┐              │
-│                    ▼               ▼               ▼              │
-│           ┌──────────────┐ ┌──────────────┐ ┌──────────────┐     │
-│           │  workspace/  │ │  workspace/  │ │  workspace/  │     │
-│           │   admin/     │ │  testuser/   │ │  newuser/    │     │
-│           │ ┌──────────┐ │ │ ┌──────────┐ │ │ ┌──────────┐ │     │
-│           │ │.opencode/ │ │ │ │.opencode/ │ │ │ │.opencode/ │ │     │
-│           │ │├─skills/  │ │ │ │├─skills/  │ │ │ │├─skills/  │ │     │
-│           │ │└─tools/   │ │ │ │└─tools/   │ │ │ │└─tools/   │ │     │
-│           │ │ MEMORY.md │ │ │ │ MEMORY.md │ │ │ │ MEMORY.md │ │     │
-│           │ │ USER.md   │ │ │ │ USER.md   │ │ │ │ USER.md   │ │     │
-│           │ └──────────┘ │ │ └──────────┘ │ │ └──────────┘ │     │
-│           └──────────────┘ └──────────────┘ └──────────────┘     │
-│                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  MySQL: users · sessions · messages · permissions · usage    │  │
-│  │  tasks · notifications · failover_chains · tool_permissions  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+ 前端 (:3000)  ──▶  后端 (:8000)  ──▶  opencode serve (:4096)
+                                            ┌──── ?directory= ────┐
+                                            │                      │
+                                   workspace/admin/       workspace/alice/
+                                   ├── .opencode/         ├── .opencode/
+                                   │   ├── skills/        │   ├── skills/
+                                   │   └── tools/         │   └── tools/
+                                   ├── MEMORY.md          ├── MEMORY.md
+                                   ├── USER.md            ├── USER.md
+                                   └── (git 仓库)         └── (git 仓库)
+
+ MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks
 ```
 
-### 核心设计
+核心设计：后端代理所有请求到同一个 opencode 实例，通过 `?directory={workspace_path}` 隔离用户。每个工作空间拥有独立的技能、工具、记忆文件和 git 历史。
 
-- **单 opencode 实例** 运行在 `:4096`，通过 `?directory=` 隔离用户工作空间
-- 每个工作空间拥有独立的 `.opencode/skills/` 和 `.opencode/tools/`
-- **模型兜底** 在 `prompt_async` 失败时自动按 fallback chain 重试
-- **撤销/重试** 使用软删除（`visible=0`）+ opencode 消息删除
-- **内容超时检测** 发现模型卡死（60秒无内容）时返回错误给前端
+此外还支持：模型兜底链、定时任务（cron）、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
 
 ---
 
-## 跨会话记忆系统
-
-记忆系统让每个用户拥有跨对话的持久上下文——AI 能记住项目细节、个人偏好和工作进展，无需反复提醒。
-
-### 工作原理
+## 跨会话记忆
 
 ```
-用户对话 → AI 判断信息值得记住
-                ↓
-         memory_save 工具 (opencode)
-                ↓
-      写入工作空间的 MEMORY.md / USER.md
-                ↓
-build_memory_context() 在下次 prompt 时读取
-                ↓
-      记忆上下文自动拼接到用户问题前
+ 用户对话 → AI 判断信息值得记住
+                  ↓
+           memory_save 工具（opencode 自定义工具）
+                  ↓
+      写入工作空间的 MEMORY.md 或 USER.md
+                  ↓
+ build_memory_context() 在下次 prompt 时读取文件
+                  ↓
+      记忆上下文自动拼接到用户问题前（无需手动操作）
 ```
 
-### 两种记忆类型
-
-| 文件 | 类型 | 内容 |
-|------|------|------|
-| `MEMORY.md` | 事实记忆 | 项目背景、工作进展、技术决策、代码库发现 |
+| 文件 | 类型 | AI 记住什么 |
+|------|------|-------------|
+| `MEMORY.md` | 事实记忆 | 项目背景、工作进展、技术决策、代码库结构 |
 | `USER.md` | 用户偏好 | 沟通风格、语言习惯、工作方式偏好 |
 
-### 架构设计
-
-- **存储**：用户工作空间内的 Markdown 文件（兼容 git，人类可读）
-- **写入**：AI 通过 opencode 自定义工具 `memory_save` 主动保存
+- **存储**：用户工作空间内的 Markdown 文件——兼容 git，人类可读
+- **写入**：AI 通过 opencode 自定义工具 `memory_save` 主动保存（`.opencode/tools/memory.ts`）
 - **读取**：每次 prompt 通过 `build_memory_context()` 自动注入（上限 2000 字符）
-- **前端**：只读查看器（Drawer 抽屉），用户可查看但不能直接编辑
-- **管理**：记忆工具出现在管理后台「工具权限管理」中，可按用户开启/关闭
-- **定时任务**：定时任务的 prompt 也会自动注入记忆上下文
+- **定时任务**：任务的 prompt 也会自动注入记忆上下文
+- **前端**：只读查看器（Drawer），管理员可按用户开启/关闭记忆工具
 
-### 后端组件
+---
 
-| 文件 | 职责 |
-|------|------|
-| `app/services/memory.py` | 核心：`build_memory_context()`、`save_memory()`、`read_memory()`、`search_memory()` |
-| `app/api/internal.py` | 内部端点：`/memory/save`、`/memory/read`、`/memory/search` |
-| `app/api/session.py` | 用户端点：`GET /api/memory`（只读） |
-| `.opencode/tools/memory.ts` | opencode 工具：`memory_save` + `memory_recall` |
-| `app/components/MemoryViewer.jsx` | 前端：只读抽屉 + Tab 切换 |
+## Git 时光机
+
+```
+ 对话回合结束
+       ↓
+ 自动 git add + commit（仅在文件有变更时）
+       ↓
+ git_snapshots 表记录 commit hash、会话、diff 摘要
+       ↓
+ 用户打开时光机 → 浏览快照、查看 diff
+       ↓
+ 点击「撤销此修改」→ git checkout {hash}^ → 文件回到修改前状态
+       ↓
+ 自动保存当前状态为新 commit（不丢失数据）
+```
+
+- 工作空间创建时自动初始化为 git 仓库
+- 每轮对话和定时任务完成后自动创建快照
+- **「撤销」恢复到父 commit**——工作空间回到该修改之前的状态
+- 初始快照（工作空间初始化）无法撤销，按钮自动禁用
+- 支持撤销全部文件或单个文件
+- 撤销前自动保存当前状态（不丢失任何内容）
 
 ---
 
@@ -131,7 +105,7 @@ build_memory_context() 在下次 prompt 时读取
 # 1. 克隆并配置
 git clone <repo-url> && cd OpenHub
 cp smart-query-backend/.env.example smart-query-backend/.env   # 填入 MySQL 凭据、JWT 密钥
-cp smart-query-frontend/.env.example smart-query-frontend/.env # 填入 API 地址
+cp smart-query-frontend/.env.example smart-query-frontend/.env
 
 # 2. 安装依赖
 cd smart-query-backend && pip install -r requirements.txt
@@ -140,12 +114,12 @@ cd ../smart-query-frontend && npm install
 # 3. 初始化数据库
 cd ../smart-query-backend && python init_db.py
 
-# 4. 启动服务
+# 4. 启动
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # 后端（自动启动 opencode）
 cd ../smart-query-frontend && npm run dev                      # 前端
 ```
 
-访问：**前端** http://localhost:3000 · **API 文档** http://localhost:8000/docs · 默认账号：`admin`/`admin`
+访问：**前端** http://localhost:3000 · **API 文档** http://localhost:8000/docs
 
 前置要求：Python 3.10+、Node.js 18+、MySQL 5.7+、[opencode](https://opencode.ai) 1.4+
 
@@ -175,98 +149,34 @@ OpenHub/
 ├── smart-query-backend/           # FastAPI 后端
 │   ├── app/
 │   │   ├── api/                   # auth, query, admin, session, internal
-│   │   ├── services/              # stream, memory, failover, scheduler, task_executor
-│   │   ├── core/                  # JWT 认证
-│   │   └── models/                # Pydantic 模型
+│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler
+│   │   └── core/                  # JWT 认证
 │   ├── workspace/{username}/      # 用户工作空间
 │   └── init_db.py
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, TaskManager, FileManager, ...
+│       ├── components/            # ChatInput, MemoryViewer, GitTimeMachine, ...
 │       └── services/api.js
-├── AGENTS.md
-└── README_CN.md                   # 本文件
+└── AGENTS.md
 ```
-
----
-
-## API 概览
-
-> 完整交互式文档见 `http://localhost:8000/docs`（Swagger UI）
-
-### 用户端点
-
-| 分组 | 核心端点 |
-|------|---------|
-| **认证** | `POST /api/auth/login`、`POST /api/auth/logout` |
-| **查询** | `POST /api/query/stream`（SSE）、`POST /api/query/abort` |
-| **会话** | `GET /api/sessions`、`DELETE .../last-turn`（撤销）、`POST .../retry` |
-| **记忆** | `GET /api/memory`（只读查看） |
-| **任务** | `GET /api/tasks`、`PUT /api/tasks/{id}`、`POST .../toggle`、`POST .../run` |
-| **文件** | `GET /api/files`、`GET /api/files/content`、`GET /api/files/download` |
-| **技能** | `GET /api/skills`、`PUT /api/skills/{name}` |
-| **通知** | `GET /api/notifications`、`GET /api/notifications/stream`（SSE） |
-
-### 管理后台端点
-
-| 分组 | 核心端点 |
-|------|---------|
-| **用户** | CRUD + `POST .../init-workspace`、按用户模型/工具/技能权限 |
-| **系统** | `GET/PUT /api/admin/system-config`、`GET/PUT .../failover-chains` |
-| **opencode** | 状态、启动、重启、配置、服务商 |
-| **工具与技能** | 列表、更新、从工作空间同步 |
-
-### 内部 API（AI 工具调用）
-
-> 需要 `X-Internal-Token` 请求头，仅限 `127.0.0.1` 访问。
-
-| 分组 | 端点 |
-|------|------|
-| **定时任务** | CRUD + 暂停/恢复/触发（`/api/internal/tasks/*`） |
-| **记忆** | `POST /memory/save`、`GET /memory/read`、`GET /memory/search` |
-
----
-
-## 用户工作空间
-
-```
-workspace/{username}/
-├── .opencode/
-│   ├── skills/           # 技能包（创建时从模板复制）
-│   └── tools/            # 自定义工具（memory.ts, scheduled-task.ts）
-├── MEMORY.md             # AI 管理的事实记忆
-├── USER.md               # AI 管理的用户偏好
-├── AGENTS.md             # Agent 指令
-└── README.md
-```
-
-- 后端通过 `?directory={workspace_path}` 创建 opencode 会话
-- opencode 将每个工作空间视为独立项目，加载对应的 skills、tools 和配置
-- 管理面板「初始化工作空间」会复制 `.opencode/`、`AGENTS.md`，创建 `MEMORY.md` + `USER.md`
 
 ---
 
 ## 配置
 
-### 后端（`.env`）
+**后端**（`smart-query-backend/.env`）：
 
 ```bash
-DB_HOST=127.0.0.1      DB_USER=root       DB_PASSWORD=***      DB_NAME=ANALYSE
+DB_HOST=127.0.0.1    DB_USER=root    DB_PASSWORD=***    DB_NAME=ANALYSE
 OPENCODE_BASE_URL=http://127.0.0.1:4096
-OPENCODE_USERNAME=opencode   OPENCODE_PASSWORD=***
+OPENCODE_USERNAME=opencode    OPENCODE_PASSWORD=***
 JWT_SECRET_KEY=***
-REDIS_HOST=localhost   REDIS_PORT=6379      REDIS_DB=0
-INTERNAL_API_SECRET=***   # 记忆和任务工具必需
+REDIS_HOST=localhost    REDIS_PORT=6379    REDIS_DB=0
+INTERNAL_API_SECRET=***    # 记忆和任务工具必需
 ```
 
-### 管理后台（`/admin`）
-
-- **opencode 服务**：工作目录、认证信息、自动启动
-- **默认模型**：分别配置 build/plan/定时任务默认模型
-- **模型兜底**：每模型的 fallback chain + 全局兜底模型
-- **模型权限**：按用户配置可用模型及月调用次数
-- **工具权限**：按用户配置每个工具的权限（包括记忆工具）
+**管理后台**（`/admin`）：用户增删改、工作空间初始化、按用户配置模型/工具/技能权限、模型兜底链、opencode 服务管理。
 
 ---
 
@@ -279,9 +189,6 @@ cd smart-query-backend && python -m uvicorn app.main:app --reload --host 0.0.0.0
 # 前端
 cd smart-query-frontend && npm run dev      # 开发服务器
 npm run build                               # 生产构建
-
-# 语法检查
-python -m py_compile app/services/stream.py
 
 # 数据库迁移
 python init_db.py

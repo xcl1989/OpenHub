@@ -11,6 +11,8 @@ from app.models.query import ArchiveRequest
 from app.services.stream import is_session_processing, stream_generator
 from app.services.opencode_client import opencode_client
 from app.services import memory
+from app.services import git_snapshot
+from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["会话"])
 
@@ -486,3 +488,229 @@ async def get_memory(current_user: dict = Depends(get_current_user)):
 
     result = await asyncio.to_thread(memory.read_memory, workspace)
     return result
+
+
+class RestoreFileRequest(BaseModel):
+    path: str = Field(..., description="要恢复的文件路径")
+
+
+@router.get("/api/snapshots")
+async def list_snapshots(
+    page: int = 1,
+    page_size: int = 20,
+    session_id: str = None,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        return {"snapshots": [], "total": 0}
+
+    if not await asyncio.to_thread(git_snapshot.is_git_repo, workspace):
+        return {"snapshots": [], "total": 0}
+
+    offset = (page - 1) * page_size
+    snapshots = await asyncio.to_thread(
+        database.get_git_snapshots, user_id, page_size, offset, session_id
+    )
+
+    for snap in snapshots:
+        git_info = await asyncio.to_thread(
+            git_snapshot.get_snapshot_info, workspace, snap["commit_hash"]
+        )
+        if git_info:
+            snap["timestamp"] = git_info["timestamp"]
+        snap["can_restore"] = await asyncio.to_thread(
+            git_snapshot.has_parent_commit, workspace, snap["commit_hash"]
+        )
+
+    return {"snapshots": snapshots, "total": len(snapshots)}
+
+
+@router.get("/api/snapshots/{commit_hash}")
+async def get_snapshot_detail(
+    commit_hash: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    snap = await asyncio.to_thread(
+        database.get_git_snapshot_by_hash, commit_hash, user_id
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="快照不存在")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="工作空间不存在")
+
+    diff = await asyncio.to_thread(
+        git_snapshot.get_snapshot_diff, workspace, commit_hash
+    )
+    snap["diff"] = diff
+
+    git_info = await asyncio.to_thread(
+        git_snapshot.get_snapshot_info, workspace, commit_hash
+    )
+    if git_info:
+        snap["timestamp"] = git_info["timestamp"]
+        snap["full_message"] = git_info["message"]
+
+    return snap
+
+
+@router.get("/api/snapshots/{commit_hash}/file")
+async def get_snapshot_file(
+    commit_hash: str,
+    path: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    snap = await asyncio.to_thread(
+        database.get_git_snapshot_by_hash, commit_hash, user_id
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="快照不存在")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="工作空间不存在")
+
+    content = await asyncio.to_thread(
+        git_snapshot.get_snapshot_file_content, workspace, commit_hash, path
+    )
+    if content is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return {"path": path, "content": content, "commit_hash": commit_hash}
+
+
+@router.post("/api/snapshots/{commit_hash}/restore")
+async def restore_all_files(
+    commit_hash: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    snap = await asyncio.to_thread(
+        database.get_git_snapshot_by_hash, commit_hash, user_id
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="快照不存在")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="工作空间不存在")
+
+    if not await asyncio.to_thread(git_snapshot.has_parent_commit, workspace, commit_hash):
+        raise HTTPException(status_code=400, detail="初始快照无法撤销")
+
+    if await asyncio.to_thread(git_snapshot.has_changes, workspace):
+        await asyncio.to_thread(
+            git_snapshot.create_snapshot, workspace, snap.get("session_id", ""),
+            snap.get("turn_id", ""), "时光机：撤销前自动保存", [],
+        )
+
+    restored = await asyncio.to_thread(
+        git_snapshot.restore_all, workspace, commit_hash
+    )
+    if restored is None:
+        raise HTTPException(status_code=500, detail="撤销失败")
+
+    new_hash = await asyncio.to_thread(
+        git_snapshot.create_restore_snapshot, workspace, restored, commit_hash,
+    )
+
+    if new_hash:
+        await asyncio.to_thread(
+            database.save_git_snapshot, user_id,
+            snap.get("session_id", ""), snap.get("turn_id", ""),
+            new_hash, f"时光机：撤销 {commit_hash[:8]} 的修改", [], 0, True,
+        )
+
+    restored_names = ", ".join(restored[:5])
+    if len(restored) > 5:
+        restored_names += f" 等 {len(restored)} 个文件"
+
+    return {
+        "ok": True,
+        "commit_hash": new_hash,
+        "restored_files": restored,
+        "message": f"已撤销修改，还原了 {len(restored)} 个文件：{restored_names}",
+    }
+
+
+@router.post("/api/snapshots/{commit_hash}/restore-file")
+async def restore_single_file(
+    commit_hash: str,
+    body: RestoreFileRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    snap = await asyncio.to_thread(
+        database.get_git_snapshot_by_hash, commit_hash, user_id
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="快照不存在")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="工作空间不存在")
+
+    if not await asyncio.to_thread(git_snapshot.has_parent_commit, workspace, commit_hash):
+        raise HTTPException(status_code=400, detail="初始快照无法撤销")
+
+    success = await asyncio.to_thread(
+        git_snapshot.restore_single_file, workspace, commit_hash, body.path
+    )
+    if success is None:
+        raise HTTPException(status_code=500, detail="撤销文件失败")
+
+    new_hash = await asyncio.to_thread(
+        git_snapshot.create_restore_snapshot, workspace, [body.path], commit_hash,
+    )
+
+    if new_hash:
+        await asyncio.to_thread(
+            database.save_git_snapshot, user_id,
+            snap.get("session_id", ""), snap.get("turn_id", ""),
+            new_hash, f"时光机：撤销 {body.path} 的修改 ({commit_hash[:8]})", [], 0, True,
+        )
+
+    return {
+        "ok": True,
+        "path": body.path,
+        "commit_hash": new_hash,
+        "message": f"已撤销 {body.path} 的修改",
+    }
+
+
+@router.get("/api/sessions/{session_id}/snapshots")
+async def list_session_snapshots(
+    session_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    offset = (page - 1) * page_size
+    snapshots = await asyncio.to_thread(
+        database.get_git_snapshots, user_id, page_size, offset, session_id
+    )
+    return {"snapshots": snapshots, "total": len(snapshots)}

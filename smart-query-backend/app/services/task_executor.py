@@ -9,6 +9,7 @@ from app.services.opencode_client import opencode_client
 from app.services import notif_stream
 from app.services.model_failover import build_failover_chain
 from app.services import memory
+from app.services import git_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,25 @@ async def execute_task(task_id: int):
         )
 
         print(f"[TaskExecutor] 任务执行成功: {task['name']} ({duration}ms)")
+
+        try:
+            if workspace and task.get("user_id"):
+                if not await asyncio.to_thread(git_snapshot.is_git_repo, workspace):
+                    await asyncio.to_thread(git_snapshot.init_git_repo, workspace)
+                if await asyncio.to_thread(git_snapshot.has_changes, workspace):
+                    diff_summary = await asyncio.to_thread(git_snapshot.get_diff_summary, workspace)
+                    commit_hash = await asyncio.to_thread(
+                        git_snapshot.create_snapshot,
+                        workspace, session_id, "", f"[定时任务] {task['name']}", diff_summary,
+                    )
+                    if commit_hash:
+                        await asyncio.to_thread(
+                            database.save_git_snapshot,
+                            task["user_id"], session_id, "", commit_hash,
+                            f"[定时任务] {task['name']}", diff_summary, len(diff_summary),
+                        )
+        except Exception as snap_err:
+            print(f"[TaskExecutor] Git snapshot skipped: {snap_err}")
 
     except Exception as e:
         import traceback
