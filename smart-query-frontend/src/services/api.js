@@ -705,6 +705,10 @@ export const snapshotService = {
     const response = await apiClient.post(`/snapshots/${commitHash}/restore-file`, { path });
     return response.data;
   },
+  getDiff: async (commitHash) => {
+    const response = await apiClient.get(`/snapshots/${commitHash}/diff`);
+    return response.data;
+  },
 };
 
 export default apiClient;

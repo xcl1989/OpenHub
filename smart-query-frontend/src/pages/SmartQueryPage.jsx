@@ -35,7 +35,6 @@ import {
   HistoryOutlined,
   SettingOutlined,
   FolderOpenOutlined,
-  SwapOutlined,
   ThunderboltOutlined,
   ClockCircleOutlined,
   BookOutlined,
@@ -48,7 +47,6 @@ import ChatInput from '../components/ChatInput';
 import HistoryDrawer from '../components/HistoryDrawer';
 import ToolCall from '../components/ToolCall';
 import FileManager from '../components/FileManager';
-import DiffViewer from '../components/DiffViewer';
 import UserSkillManager from '../components/UserSkillManager';
 import TaskManager from '../components/TaskManager';
 import NotificationBell from '../components/NotificationBell';
@@ -100,7 +98,6 @@ const SmartQueryPage = () => {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
   const [fileManagerVisible, setFileManagerVisible] = useState(false);
-  const [diffViewerVisible, setDiffViewerVisible] = useState(false);
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [taskManagerVisible, setTaskManagerVisible] = useState(false);
   const [memoryViewerVisible, setMemoryViewerVisible] = useState(false);
@@ -1595,12 +1592,6 @@ const SmartQueryPage = () => {
         onClose={() => setFileManagerVisible(false)}
       />
 
-      <DiffViewer
-        open={diffViewerVisible}
-        onClose={() => setDiffViewerVisible(false)}
-        conversationId={conversationId}
-      />
-
       <UserSkillManager
         open={skillManagerVisible}
         onClose={() => setSkillManagerVisible(false)}
@@ -1852,18 +1843,6 @@ const SmartQueryPage = () => {
         >
           <span className="toolbar-btn-text">文件管理</span>
         </Button>
-        {/*
-        <Button
-          icon={<SwapOutlined />}
-          onClick={() => setDiffViewerVisible(true)}
-          size="small"
-          type="text"
-          disabled={!conversationId}
-          title="查看变更"
-        >
-          <span className="toolbar-btn-text">查看变更</span>
-        </Button>
-        */}
         <Button
           icon={<ThunderboltOutlined />}
           onClick={() => {

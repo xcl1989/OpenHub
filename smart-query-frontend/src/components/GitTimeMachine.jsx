@@ -1,9 +1,60 @@
 import React, { useState, useEffect } from 'react';
 import { Drawer, Tabs, Spin, message, Space, Tag, Button, Popconfirm, Modal, Typography, Tooltip } from 'antd';
-import { HistoryOutlined, FileOutlined, UndoOutlined } from '@ant-design/icons';
+import { HistoryOutlined, FileOutlined, UndoOutlined, RightOutlined, DownOutlined } from '@ant-design/icons';
 import { snapshotService } from '../services/api';
 
 const { Text } = Typography;
+
+function parseDiffLines(content) {
+  if (!content) return [];
+  const lines = content.split('\n');
+  return lines.map((line, i) => {
+    let type = 'context';
+    if (line.startsWith('+++') || line.startsWith('---')) type = 'header';
+    else if (line.startsWith('+')) type = 'added';
+    else if (line.startsWith('-')) type = 'removed';
+    else if (line.startsWith('@@')) type = 'hunk';
+    return { num: i + 1, text: line, type };
+  });
+}
+
+const LINE_STYLES = {
+  added: { background: '#f6ffed', color: '#237804' },
+  removed: { background: '#fff1f0', color: '#cf1322' },
+  hunk: { background: '#e6f7ff', color: '#096dd9' },
+  header: { background: '#fafafa', color: '#595959', fontWeight: 600 },
+  context: { color: '#595959' },
+};
+
+function DiffBlock({ lines }) {
+  return (
+    <div style={{
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: 12,
+      lineHeight: 1.6,
+      maxHeight: 400,
+      overflow: 'auto',
+      borderTop: '1px solid #f0f0f0',
+    }}>
+      {lines.map((line) => (
+        <div
+          key={line.num}
+          style={{
+            ...LINE_STYLES[line.type],
+            padding: '0 12px',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}
+        >
+          <span style={{ opacity: 0.4, marginRight: 8, userSelect: 'none' }}>
+            {line.num}
+          </span>
+          {line.text}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
   const width = isMobile ? '100%' : 720;
@@ -16,6 +67,8 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [fileContent, setFileContent] = useState('');
   const [filePath, setFilePath] = useState('');
+  const [expandedDiffs, setExpandedDiffs] = useState({});
+  const [diffCache, setDiffCache] = useState({});
 
   useEffect(() => {
     if (open) {
@@ -44,6 +97,7 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
   const handleViewDetail = async (commitHash) => {
     setDetailLoading(true);
     setDetailVisible(true);
+    setExpandedDiffs({});
     try {
       const result = await snapshotService.getDetail(commitHash);
       setDetailData(result);
@@ -62,6 +116,34 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
       setFileModalVisible(true);
     } catch {
       message.error('获取文件内容失败');
+    }
+  };
+
+  const handleToggleDiff = async (commitHash, filePath) => {
+    const key = `${commitHash}:${filePath}`;
+    if (expandedDiffs[key]) {
+      setExpandedDiffs(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+
+    setExpandedDiffs(prev => ({ ...prev, [key]: true }));
+
+    if (!diffCache[key]) {
+      try {
+        const result = await snapshotService.getDiff(commitHash);
+        setDiffCache(prev => ({ ...prev, [key]: result.diff_content || '' }));
+      } catch {
+        message.error('获取 diff 内容失败');
+        setExpandedDiffs(prev => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      }
     }
   };
 
@@ -94,6 +176,21 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
   const formatTime = (ts) => {
     if (!ts) return '';
     return ts.replace('T', ' ').substring(0, 19);
+  };
+
+  const extractFileDiff = (rawDiff, filePath) => {
+    if (!rawDiff) return '';
+    const lines = rawDiff.split('\n');
+    const result = [];
+    let inFile = false;
+    for (const line of lines) {
+      if (line.startsWith('diff --git')) {
+        const match = line.match(/b\/(.+)$/);
+        inFile = match && match[1] === filePath;
+      }
+      if (inFile) result.push(line);
+    }
+    return result.join('\n');
   };
 
   const renderSnapshotItem = (snap) => {
@@ -179,14 +276,15 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
 
   const renderDetailModal = () => {
     const canRestore = detailData?.can_restore !== false;
+    const commitHash = detailData?.commit_hash;
 
     return (
       <Modal
-        title={detailData ? `快照 ${detailData.commit_hash?.substring(0, 8)}` : '快照详情'}
+        title={detailData ? `快照 ${commitHash?.substring(0, 8)}` : '快照详情'}
         open={detailVisible}
-        onCancel={() => { setDetailVisible(false); setDetailData(null); }}
+        onCancel={() => { setDetailVisible(false); setDetailData(null); setExpandedDiffs({}); }}
         footer={null}
-        width={700}
+        width={780}
       >
         {detailLoading ? (
           <Spin style={{ display: 'block', margin: '40px auto' }} />
@@ -204,41 +302,73 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
             {(detailData.diff || []).length > 0 ? (
               <div>
                 <Text strong style={{ marginBottom: 8, display: 'block' }}>文件变更：</Text>
-                {(detailData.diff || []).map((f, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex', alignItems: 'center', padding: '6px 0',
-                      borderBottom: '1px solid #f5f5f5',
-                    }}
-                  >
-                    <FileOutlined style={{ marginRight: 8, color: '#1890ff' }} />
-                    <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13 }}>{f.path}</span>
-                    <Tag color="green" style={{ marginLeft: 8 }}>+{f.added}</Tag>
-                    <Tag color="red">-{f.removed}</Tag>
-                    <Button
-                      type="link"
-                      size="small"
-                      onClick={() => handleViewFile(detailData.commit_hash, f.path)}
+                {(detailData.diff || []).map((f, i) => {
+                  const diffKey = `${commitHash}:${f.path}`;
+                  const isExpanded = !!expandedDiffs[diffKey];
+                  const rawDiff = diffCache[diffKey];
+                  const fileDiff = rawDiff ? extractFileDiff(rawDiff, f.path) : '';
+                  const diffLines = fileDiff ? parseDiffLines(fileDiff) : [];
+
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 6,
+                        marginBottom: 8,
+                        overflow: 'hidden',
+                      }}
                     >
-                      查看
-                    </Button>
-                    {canRestore ? (
-                      <Popconfirm
-                        title={`确认撤销 ${f.path} 的修改？`}
-                        onConfirm={() => handleUndoFile(detailData.commit_hash, f.path)}
-                        okText="撤销"
-                        cancelText="取消"
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          background: '#fafafa',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => handleToggleDiff(commitHash, f.path)}
                       >
-                        <Button type="link" size="small" danger>撤销此文件</Button>
-                      </Popconfirm>
-                    ) : (
-                      <Tooltip title="初始快照，无法撤销">
-                        <Button type="link" size="small" disabled>撤销此文件</Button>
-                      </Tooltip>
-                    )}
-                  </div>
-                ))}
+                        {isExpanded ? <DownOutlined style={{ marginRight: 8, fontSize: 11 }} /> : <RightOutlined style={{ marginRight: 8, fontSize: 11 }} />}
+                        <FileOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+                        <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13 }}>{f.path}</span>
+                        <Tag color="green" style={{ marginLeft: 8 }}>+{f.added}</Tag>
+                        <Tag color="red">-{f.removed}</Tag>
+                        <span onClick={e => e.stopPropagation()}>
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => handleViewFile(commitHash, f.path)}
+                          >
+                            查看
+                          </Button>
+                          {canRestore ? (
+                            <Popconfirm
+                              title={`确认撤销 ${f.path} 的修改？`}
+                              onConfirm={() => handleUndoFile(commitHash, f.path)}
+                              okText="撤销"
+                              cancelText="取消"
+                            >
+                              <Button type="link" size="small" danger>撤销此文件</Button>
+                            </Popconfirm>
+                          ) : (
+                            <Tooltip title="初始快照，无法撤销">
+                              <Button type="link" size="small" disabled>撤销此文件</Button>
+                            </Tooltip>
+                          )}
+                        </span>
+                      </div>
+                      {isExpanded && diffLines.length > 0 && (
+                        <DiffBlock lines={diffLines} />
+                      )}
+                      {isExpanded && diffLines.length === 0 && rawDiff === undefined && (
+                        <div style={{ padding: '12px', textAlign: 'center' }}>
+                          <Spin size="small" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <Text type="secondary">无文件变更记录</Text>
@@ -308,7 +438,7 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
         />
         <div style={{ marginTop: 16, padding: '12px', background: '#f5f5f5', borderRadius: 6 }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            每次对话结束后自动保存快照。点击「撤销此修改」可将文件恢复到该修改之前的状态，当前状态会先自动保存。
+            每次对话结束后自动保存快照。点击快照查看详情，点击文件名展开行级 diff，点击「撤销此修改」可恢复到修改前状态。
           </Text>
         </div>
       </Drawer>

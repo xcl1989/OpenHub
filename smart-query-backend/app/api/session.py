@@ -564,6 +564,32 @@ async def get_snapshot_detail(
     return snap
 
 
+@router.get("/api/snapshots/{commit_hash}/diff")
+async def get_snapshot_diff_content(
+    commit_hash: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    snap = await asyncio.to_thread(
+        database.get_git_snapshot_by_hash, commit_hash, user_id
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="快照不存在")
+
+    workspace = await asyncio.to_thread(database.get_user_workspace, user_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="工作空间不存在")
+
+    diff_content = await asyncio.to_thread(
+        git_snapshot.get_snapshot_diff_content, workspace, commit_hash
+    )
+
+    return {"diff_content": diff_content or ""}
+
+
 @router.get("/api/snapshots/{commit_hash}/file")
 async def get_snapshot_file(
     commit_hash: str,
