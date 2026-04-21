@@ -169,6 +169,10 @@ Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, [opencode](https://opencod
 |:-:|:-:|:-:|
 | ![Tools](pic/toolmanage.png) | ![Usage](pic/usage.png) | ![Models](pic/modelsetting.png) |
 
+| Smart Entity Management | Collaboration Tasks | Cross-session Memory |
+|:-:|:-:|:-:|
+| ![Smart Entity](pic/smartentity.png) | ![Collab Tasks](pic/collabotask.png) | ![Memory](pic/memory.png) |
+
 ---
 
 ## Project Structure

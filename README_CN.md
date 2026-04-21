@@ -169,6 +169,10 @@ cd ../smart-query-frontend && npm run dev                      # 前端
 |:-:|:-:|:-:|
 | ![工具](pic/toolmanage.png) | ![用量](pic/usage.png) | ![模型](pic/modelsetting.png) |
 
+| 智能体管理 | 协作任务中心 | 跨会话记忆 |
+|:-:|:-:|:-:|
+| ![智能体](pic/smartentity.png) | ![协作任务](pic/collabotask.png) | ![记忆](pic/memory.png) |
+
 ---
 
 ## 项目结构
