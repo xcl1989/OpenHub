@@ -249,6 +249,110 @@ TABLES = {
             INDEX idx_commit_hash (commit_hash)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "smart_entities": """
+        CREATE TABLE IF NOT EXISTS smart_entities (
+            entity_id VARCHAR(100) PRIMARY KEY,
+            owner_user_id INT NOT NULL,
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            base_agent VARCHAR(50) DEFAULT 'build',
+            data_exchange_config JSON,
+            collaboration_config JSON,
+            discovery_config JSON,
+            capabilities JSON,
+            status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_owner (owner_user_id),
+            FULLTEXT INDEX ft_description (name, description)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_tasks": """
+        CREATE TABLE IF NOT EXISTS smart_entity_tasks (
+            task_id VARCHAR(64) PRIMARY KEY,
+            from_entity_id VARCHAR(100) NOT NULL,
+            from_user_id INT NOT NULL,
+            to_entity_id VARCHAR(100) NOT NULL,
+            to_user_id INT NOT NULL,
+            task_type ENUM('capability_request', 'data_exchange', 'review', 'custom') NOT NULL,
+            task_title VARCHAR(200) NOT NULL,
+            task_description TEXT,
+            input_data JSON,
+            output_data JSON,
+            data_encryption_key_id VARCHAR(100),
+            status ENUM('pending', 'accepted', 'processing', 'awaiting_approval', 'completed', 'rejected', 'timeout', 'failed') DEFAULT 'pending',
+            attempt_count INT DEFAULT 0,
+            error_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            accepted_at DATETIME,
+            started_at DATETIME,
+            completed_at DATETIME,
+            expires_at DATETIME,
+            FOREIGN KEY (from_entity_id) REFERENCES smart_entities(entity_id),
+            FOREIGN KEY (to_entity_id) REFERENCES smart_entities(entity_id),
+            INDEX idx_to_user_status (to_user_id, status),
+            INDEX idx_from_user (from_user_id),
+            INDEX idx_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_task_configs": """
+        CREATE TABLE IF NOT EXISTS smart_entity_task_configs (
+            task_id VARCHAR(64) PRIMARY KEY,
+            entity_id VARCHAR(100) NOT NULL,
+            config_snapshot JSON NOT NULL,
+            snapshot_version INT DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES smart_entity_tasks(task_id),
+            FOREIGN KEY (entity_id) REFERENCES smart_entities(entity_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_metrics": """
+        CREATE TABLE IF NOT EXISTS smart_entity_metrics (
+            entity_id VARCHAR(100) PRIMARY KEY,
+            total_tasks_received INT DEFAULT 0,
+            total_tasks_completed INT DEFAULT 0,
+            total_tasks_failed INT DEFAULT 0,
+            total_processing_time INT DEFAULT 0,
+            avg_response_time INT DEFAULT 0,
+            last_task_at DATETIME,
+            daily_quota INT DEFAULT 100,
+            daily_used INT DEFAULT 0,
+            quota_reset_at DATETIME,
+            FOREIGN KEY (entity_id) REFERENCES smart_entities(entity_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_billing_records": """
+        CREATE TABLE IF NOT EXISTS smart_entity_billing_records (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            entity_id VARCHAR(100) NOT NULL,
+            task_id VARCHAR(64) NOT NULL,
+            billing_type ENUM('task_completion', 'data_transfer', 'storage') NOT NULL,
+            quantity DECIMAL(10, 2),
+            unit_price DECIMAL(10, 4),
+            total_cost DECIMAL(10, 2),
+            currency VARCHAR(3) DEFAULT 'CNY',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (entity_id) REFERENCES smart_entities(entity_id),
+            INDEX idx_entity_date (entity_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_data_audit": """
+        CREATE TABLE IF NOT EXISTS smart_entity_data_audit (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            task_id VARCHAR(64) NOT NULL,
+            entity_id VARCHAR(100) NOT NULL,
+            action ENUM('sent', 'received') NOT NULL,
+            data_type VARCHAR(50) NOT NULL,
+            data_size INT NOT NULL,
+            data_hash VARCHAR(64) NOT NULL,
+            encryption_method VARCHAR(20),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES smart_entity_tasks(task_id),
+            INDEX idx_task (task_id),
+            INDEX idx_entity (entity_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 

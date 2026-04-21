@@ -712,3 +712,65 @@ export const snapshotService = {
 };
 
 export default apiClient;
+
+
+// 智能体管理服务
+export const smartEntityService = {
+  // 获取智能体列表
+  list: async () => {
+    const response = await apiClient.get('/smart-entities');
+    return response.data;
+  },
+  
+  // 获取单个智能体
+  get: async (entityId) => {
+    const response = await apiClient.get(`/smart-entities/${entityId}`);
+    return response.data;
+  },
+  
+  // 创建智能体
+  create: async (data) => {
+    const response = await apiClient.post('/smart-entities', data);
+    return response.data;
+  },
+  
+  // 更新智能体
+  update: async (entityId, data) => {
+    const response = await apiClient.put(`/smart-entities/${entityId}`, data);
+    return response.data;
+  },
+  
+  // 删除智能体
+  delete: async (entityId) => {
+    const response = await apiClient.delete(`/smart-entities/${entityId}`);
+    return response.data;
+  },
+};
+
+
+// 智能体任务服务
+export const smartEntityTaskService = {
+  // 创建任务
+  create: async (fromEntityId, data) => {
+    const response = await apiClient.post(`/smart-entity-tasks?from_entity_id=${fromEntityId}`, data);
+    return response.data;
+  },
+  
+  // 获取任务列表
+  list: async (params = {}) => {
+    const response = await apiClient.get('/smart-entity-tasks', { params });
+    return response.data;
+  },
+  
+  // 获取任务详情
+  get: async (taskId) => {
+    const response = await apiClient.get(`/smart-entity-tasks/${taskId}`);
+    return response.data;
+  },
+  
+  // 执行任务动作
+  action: async (taskId, action, reason = null) => {
+    const response = await apiClient.post(`/smart-entity-tasks/${taskId}/action`, { action, reason });
+    return response.data;
+  },
+};

@@ -125,6 +125,7 @@ async def archive_session(
 @router.get("/api/skills")
 async def get_user_skills(current_user: dict = Depends(get_current_user)):
     """获取用户的技能列表（从用户工作空间同步）"""
+    import os
     from app.database import (
         get_user_workspace,
         sync_skills_from_workspace,
@@ -142,8 +143,15 @@ async def get_user_skills(current_user: dict = Depends(get_current_user)):
         s["skill_name"]: s for s in get_user_skill_permissions(current_user.get("id"))
     }
 
+    skills_dir = os.path.join(workspace, ".opencode", "skills")
+    workspace_skills = set()
+    if os.path.isdir(skills_dir):
+        workspace_skills = set(os.listdir(skills_dir))
+
     result = []
     for s in skills:
+        if s["skill_name"] not in workspace_skills:
+            continue
         perm = user_perms.get(s["skill_name"], {})
         result.append(
             {
@@ -164,10 +172,27 @@ async def update_user_skill(
     skill_name: str, enabled: bool, current_user: dict = Depends(get_current_user)
 ):
     """更新用户的技能启用状态"""
-    from app.database import set_user_skill_permission
+    import os
+    from pathlib import Path
+    from app.database import set_user_skill_permission, get_user_workspace
 
+    user_id = current_user.get("id")
     action = "allow" if enabled else "deny"
-    set_user_skill_permission(current_user.get("id"), skill_name, action)
+    set_user_skill_permission(user_id, skill_name, action)
+
+    workspace = get_user_workspace(user_id)
+    if workspace and workspace != "__NONE__":
+        skill_dir = Path(workspace) / ".opencode" / "skills" / skill_name
+        if skill_dir.is_dir():
+            skill_md = skill_dir / "SKILL.md"
+            disabled_md = skill_dir / "SKILL.md.disabled"
+            if action == "deny":
+                if skill_md.exists() and not disabled_md.exists():
+                    os.rename(skill_md, disabled_md)
+            else:
+                if disabled_md.exists():
+                    os.rename(disabled_md, skill_md)
+
     return {"success": True}
 
 

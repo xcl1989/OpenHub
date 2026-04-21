@@ -38,7 +38,9 @@ import {
   ThunderboltOutlined,
   ClockCircleOutlined,
   BookOutlined,
-  RollbackOutlined
+  RollbackOutlined,
+  RobotOutlined,
+  TeamOutlined
 } from '@ant-design/icons';
 import { queryDataService, authService, clearAuthToken, diffService } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -52,6 +54,8 @@ import TaskManager from '../components/TaskManager';
 import NotificationBell from '../components/NotificationBell';
 import MemoryViewer from '../components/MemoryViewer';
 import GitTimeMachine from '../components/GitTimeMachine';
+import SmartEntityManager from '../components/SmartEntityManager';
+import SmartEntityTaskCenter from '../components/SmartEntityTaskCenter';
 import TodoFloatPanel from '../components/TodoFloatPanel';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
@@ -87,6 +91,7 @@ const SmartQueryPage = () => {
   const pendingQuestionIdRef = useRef(null);
   const fileInputRef = useRef(null);
   const queryStartTimeRef = useRef(null);
+  const sendingRef = useRef(false)
   const messagesContainerRef = useRef(null);
   const [containerWidth, setContainerWidth] = useState(800);
   const [isMobile, setIsMobile] = useState(false);
@@ -101,6 +106,8 @@ const SmartQueryPage = () => {
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [taskManagerVisible, setTaskManagerVisible] = useState(false);
   const [memoryViewerVisible, setMemoryViewerVisible] = useState(false);
+  const [smartEntityManagerVisible, setSmartEntityManagerVisible] = useState(false);
+  const [smartEntityTaskCenterVisible, setSmartEntityTaskCenterVisible] = useState(false);
   const [timeMachineVisible, setTimeMachineVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
@@ -1029,6 +1036,11 @@ const SmartQueryPage = () => {
   };
 
   const handleSend = async (overrideQuestion) => {
+    console.log('[handleSend] called, sendingRef:', sendingRef.current, 'loading:', loading);
+    if (sendingRef.current) {
+      console.log('[handleSend] blocked by sendingRef guard');
+      return;
+    }
     const rawQ = overrideQuestion !== undefined ? overrideQuestion : question;
     // 确保 q 是字符串
     let q;
@@ -1043,13 +1055,16 @@ const SmartQueryPage = () => {
     
     if (!q.trim() && selectedImages.length === 0) return;
 
+    sendingRef.current = true;
+
     // 检查模型余量
     if (currentModel && currentModel.monthlyLimit > 0 && (currentModel.currentUsage || 0) >= currentModel.monthlyLimit) {
       AntMessage.warning(`模型 ${currentModel.modelID || ''} 本月调用次数已达上限 (${currentModel.monthlyLimit}/${currentModel.monthlyLimit})，请更换模型或联系管理员`);
+      sendingRef.current = false;
       return;
     }
 
-    const turnId = crypto.randomUUID();
+    const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
     const userMessage = {
       id: Date.now().toString(),
@@ -1252,6 +1267,7 @@ const SmartQueryPage = () => {
           }
           setLoading(false);
           setIdleState(true);
+          sendingRef.current = false;
           if (currentModel && currentModel.monthlyLimit > 0) {
             const updated = { ...currentModel, currentUsage: (currentModel.currentUsage || 0) + 1 };
             setCurrentModel(updated);
@@ -1261,6 +1277,7 @@ const SmartQueryPage = () => {
         (err) => {
           setError(err.message || '查询失败，请稍后重试');
           setLoading(false);
+          sendingRef.current = false;
         },
         currentImages.length > 0 ? currentImages.map(img => ({ base64: img.base64, name: img.name })) : null,
         currentAgent,
@@ -1270,6 +1287,7 @@ const SmartQueryPage = () => {
     } catch (err) {
       setError(err.message || '查询失败，请稍后重试');
       setLoading(false);
+      sendingRef.current = false;
     }
   };
 
@@ -1617,6 +1635,18 @@ const SmartQueryPage = () => {
         currentSessionId={conversationId}
       />
 
+      <SmartEntityManager
+        open={smartEntityManagerVisible}
+        onClose={() => setSmartEntityManagerVisible(false)}
+        isMobile={isMobile}
+      />
+
+      <SmartEntityTaskCenter
+        open={smartEntityTaskCenterVisible}
+        onClose={() => setSmartEntityTaskCenterVisible(false)}
+        isMobile={isMobile}
+      />
+
       {/* 归档确认 Modal */}
       <Modal
         title="确认归档"
@@ -1821,6 +1851,7 @@ const SmartQueryPage = () => {
           onClick={() => {
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
             setHistoryDrawerVisible(true);
           }}
           size="small"
@@ -1835,6 +1866,7 @@ const SmartQueryPage = () => {
             setSkillManagerVisible(false);
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
             setFileManagerVisible(true);
           }}
           size="small"
@@ -1850,6 +1882,7 @@ const SmartQueryPage = () => {
             setTaskManagerVisible(false);
             setMemoryViewerVisible(false);
             setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1863,6 +1896,7 @@ const SmartQueryPage = () => {
           onClick={() => {
             setSkillManagerVisible(false);
             setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
             setTaskManagerVisible(true);
           }}
           size="small"
@@ -1877,6 +1911,7 @@ const SmartQueryPage = () => {
             setSkillManagerVisible(false);
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
             setMemoryViewerVisible(true);
           }}
           size="small"
@@ -1886,18 +1921,37 @@ const SmartQueryPage = () => {
           <span className="toolbar-btn-text">记忆</span>
         </Button>
         <Button
-          icon={<RollbackOutlined />}
+          icon={<RobotOutlined />}
           onClick={() => {
             setSkillManagerVisible(false);
             setTaskManagerVisible(false);
             setMemoryViewerVisible(false);
-            setTimeMachineVisible(true);
+            setTimeMachineVisible(false);
+            setSmartEntityTaskCenterVisible(false);
+            setSmartEntityTaskCenterVisible(false);
+            setSmartEntityManagerVisible(true);
           }}
           size="small"
           type="text"
-          title="时光机"
+          title="智能体"
         >
-          <span className="toolbar-btn-text">时光机</span>
+          <span className="toolbar-btn-text">智能体</span>
+        </Button>
+        <Button
+          icon={<TeamOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setMemoryViewerVisible(false);
+            setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
+            setSmartEntityTaskCenterVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="协作任务"
+        >
+          <span className="toolbar-btn-text">协作任务</span>
         </Button>
         <NotificationBell />
       </div>
@@ -2106,7 +2160,7 @@ const SmartQueryPage = () => {
           padding: 0 !important;
           height: 100%;
           overscroll-behavior: none;
-          touch-action: pan-y;
+          touch-action: manipulation;
         }
 
         /* 桌面端样式优化 */
@@ -2399,7 +2453,7 @@ const SmartQueryPage = () => {
           html, body {
             height: 100%;
             overscroll-behavior: none;
-            touch-action: pan-y;
+            touch-action: manipulation;
             overflow: hidden;
             width: 100%;
           }
@@ -2409,7 +2463,7 @@ const SmartQueryPage = () => {
             padding-bottom: calc(4px + env(safe-area-inset-bottom)) !important;
             height: 100svh !important;
             overscroll-behavior: none;
-            touch-action: pan-y;
+            touch-action: manipulation;
             overflow: hidden;
             max-width: 100vw !important;
             box-sizing: border-box !important;
@@ -2444,7 +2498,7 @@ const SmartQueryPage = () => {
 
           .messages-area {
             padding: 8px !important;
-            touch-action: pan-y;
+            touch-action: manipulation;
             -webkit-overflow-scrolling: touch;
             overflow-x: hidden !important;
             overflow-y: auto !important;

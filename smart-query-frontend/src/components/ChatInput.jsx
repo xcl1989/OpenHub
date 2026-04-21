@@ -475,7 +475,7 @@ export default function ChatInput({
         <TextArea
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={handleKeyPress}
           placeholder="输入您的问题，按 Enter 发送..."
           autoSize={{ minRows: 2, maxRows: 5 }}
           disabled={loading && !idleState}
@@ -532,7 +532,7 @@ export default function ChatInput({
           <Button
             type="primary"
             icon={<SendOutlined />}
-            onClick={() => handleSend()}
+            onClick={() => { console.log('[ChatInput] send button clicked'); handleSend(); }}
             disabled={(!question.trim() && selectedImages.length === 0) || (model?.monthlyLimit > 0 && (model?.currentUsage || 0) >= model?.monthlyLimit)}
             title={model?.monthlyLimit > 0 && (model?.currentUsage || 0) >= model?.monthlyLimit ? '模型调用次数已达上限，请更换模型或联系管理员' : ''}
             size="large"

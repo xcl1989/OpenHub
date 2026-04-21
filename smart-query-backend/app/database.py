@@ -1113,6 +1113,10 @@ def sync_tools_from_opencode() -> list:
         "scheduled_task_resume": ("custom", "恢复定时任务"),
         "memory_save": ("custom", "保存跨会话记忆"),
         "memory_recall": ("custom", "读取跨会话记忆"),
+        "smart_entity_list": ("custom", "列出可用智能体"),
+        "smart_entity_delegate": ("custom", "向智能体委托任务"),
+        "smart_entity_task_list": ("custom", "查看智能体任务列表"),
+        "smart_entity_task_action": ("custom", "操作智能体任务（接受/拒绝/取消）"),
     }
     for name, (risk, desc) in builtin_tools.items():
         upsert_tool_permission(name, risk, desc)
@@ -1792,4 +1796,326 @@ def update_message_opencode_id(db_id: int, opencode_message_id: str) -> bool:
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新 opencode message ID 失败：{e}")
+        return False
+
+
+# =============================================================================
+# Smart Entity (智能体) 相关数据库操作
+# =============================================================================
+
+import json
+from datetime import datetime, timedelta
+
+DEFAULT_DATA_EXCHANGE_CONFIG = {
+    "allowed_types": [],
+    "forbidden_types": ["credentials", "personal_info"],
+    "max_data_size": 10485760,
+    "require_encryption": True
+}
+
+DEFAULT_COLLABORATION_CONFIG = {
+    "auto_accept_tasks": False,
+    "max_concurrent_tasks": 3,
+    "timeout_seconds": 3600,
+    "notify_user_on_completion": True
+}
+
+DEFAULT_DISCOVERY_CONFIG = {
+    "is_public": False,
+    "allow_direct_delegation": False,
+    "team_whitelist": []
+}
+
+
+def create_smart_entity(
+    entity_id: str,
+    owner_user_id: int,
+    name: str,
+    description: str,
+    base_agent: str = "build",
+    data_exchange_config: dict = None,
+    collaboration_config: dict = None,
+    discovery_config: dict = None,
+    capabilities: list = None
+) -> dict:
+    """创建智能体"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                config_de = json.dumps(data_exchange_config or DEFAULT_DATA_EXCHANGE_CONFIG)
+                config_co = json.dumps(collaboration_config or DEFAULT_COLLABORATION_CONFIG)
+                config_di = json.dumps(discovery_config or DEFAULT_DISCOVERY_CONFIG)
+                caps = json.dumps(capabilities or [])
+                
+                cursor.execute(
+                    """INSERT INTO smart_entities 
+                       (entity_id, owner_user_id, name, description, base_agent,
+                        data_exchange_config, collaboration_config, discovery_config, capabilities)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (entity_id, owner_user_id, name, description, base_agent,
+                     config_de, config_co, config_di, caps)
+                )
+                conn.commit()
+                
+                # 初始化指标
+                cursor.execute(
+                    "INSERT INTO smart_entity_metrics (entity_id) VALUES (%s)",
+                    (entity_id,)
+                )
+                conn.commit()
+                
+                return get_smart_entity(entity_id)
+    except Exception as e:
+        print(f"创建智能体失败：{e}")
+        return None
+
+
+def get_smart_entity(entity_id: str) -> dict:
+    """获取单个智能体"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM smart_entities WHERE entity_id = %s",
+                    (entity_id,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取智能体失败：{e}")
+        return None
+
+
+def get_user_smart_entities(user_id: int) -> list:
+    """获取用户的所有智能体"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM smart_entities WHERE owner_user_id = %s ORDER BY created_at DESC",
+                    (user_id,)
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户智能体失败：{e}")
+        return []
+
+
+def get_discoverable_smart_entities(user_id: int) -> list:
+    """获取可发现的智能体（其他用户的公开智能体）"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT se.*, sm.total_tasks_completed, sm.total_tasks_failed, sm.avg_response_time 
+                         FROM smart_entities se
+                         LEFT JOIN smart_entity_metrics sm ON se.entity_id = sm.entity_id
+                         WHERE se.owner_user_id != %s 
+                         AND se.status = 'active'
+                         AND JSON_EXTRACT(se.discovery_config, '$.is_public') = TRUE
+                         ORDER BY sm.total_tasks_completed DESC, se.created_at DESC""",
+                    (user_id,)
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取可发现智能体失败：{e}")
+        return []
+
+
+def update_smart_entity(entity_id: str, updates: dict) -> bool:
+    """更新智能体"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                allowed_fields = [
+                    'name', 'description', 'base_agent', 'status',
+                    'data_exchange_config', 'collaboration_config', 'discovery_config', 'capabilities'
+                ]
+                
+                set_parts = []
+                params = []
+                
+                for field in allowed_fields:
+                    if field in updates:
+                        set_parts.append(f"{field} = %s")
+                        value = updates[field]
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value)
+                        params.append(value)
+                
+                if not set_parts:
+                    return False
+                
+                params.append(entity_id)
+                sql = f"UPDATE smart_entities SET {', '.join(set_parts)} WHERE entity_id = %s"
+                cursor.execute(sql, params)
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新智能体失败：{e}")
+        return False
+
+
+def delete_smart_entity(entity_id: str) -> bool:
+    """删除智能体（检查是否有进行中任务）"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                # 检查是否有进行中任务
+                cursor.execute(
+                    """SELECT COUNT(*) as count FROM smart_entity_tasks 
+                       WHERE (to_entity_id = %s OR from_entity_id = %s)
+                       AND status IN ('pending', 'accepted', 'processing')""",
+                    (entity_id, entity_id)
+                )
+                result = cursor.fetchone()
+                if result and result['count'] > 0:
+                    print(f"智能体 {entity_id} 有进行中任务，无法删除")
+                    return False
+                
+                cursor.execute("DELETE FROM smart_entities WHERE entity_id = %s", (entity_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除智能体失败：{e}")
+        return False
+
+
+
+# =============================================================================
+# Smart Entity Task (智能体协作任务) 相关数据库操作
+# =============================================================================
+
+def create_smart_entity_task(
+    task_id: str,
+    from_entity_id: str,
+    from_user_id: int,
+    to_entity_id: str,
+    to_user_id: int,
+    task_type: str,
+    task_title: str,
+    task_description: str,
+    input_data: dict = None,
+    expires_at=None
+) -> dict:
+    """创建智能体协作任务"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO smart_entity_tasks 
+                       (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
+                        task_type, task_title, task_description, input_data, expires_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
+                     task_type, task_title, task_description, json.dumps(input_data or {}), expires_at)
+                )
+                conn.commit()
+                return get_smart_entity_task(task_id)
+    except Exception as e:
+        print(f"创建智能体任务失败：{e}")
+        return None
+
+
+def get_smart_entity_task(task_id: str) -> dict:
+    """获取单个任务"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM smart_entity_tasks WHERE task_id = %s",
+                    (task_id,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取智能体任务失败：{e}")
+        return None
+
+
+def get_user_smart_entity_tasks(user_id: int, status_filter: list = None) -> list:
+    """获取用户的智能体任务"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                sql = "SELECT * FROM smart_entity_tasks WHERE (from_user_id = %s OR to_user_id = %s)"
+                params = [user_id, user_id]
+                
+                if status_filter:
+                    placeholders = ",".join(["%s"] * len(status_filter))
+                    sql += f" AND status IN ({placeholders})"
+                    params.extend(status_filter)
+                
+                sql += " ORDER BY created_at DESC"
+                
+                cursor.execute(sql, params)
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户智能体任务失败：{e}")
+        return []
+
+
+def update_task_session_id(task_id: str, session_id: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE smart_entity_tasks SET session_id = %s WHERE task_id = %s",
+                    (session_id, task_id)
+                )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"更新任务session_id失败：{e}")
+        return False
+
+
+def update_smart_entity_task_status(task_id: str, status: str, output_data: dict = None, error_message: str = None) -> bool:
+    """更新任务状态"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                now = datetime.now()
+                
+                if status == "accepted":
+                    cursor.execute(
+                        "UPDATE smart_entity_tasks SET status = %s, accepted_at = %s WHERE task_id = %s",
+                        (status, now, task_id)
+                    )
+                elif status == "processing":
+                    cursor.execute(
+                        "UPDATE smart_entity_tasks SET status = %s, started_at = %s WHERE task_id = %s",
+                        (status, now, task_id)
+                    )
+                elif status in ["completed", "rejected", "timeout", "failed"]:
+                    cursor.execute(
+                        """UPDATE smart_entity_tasks 
+                           SET status = %s, completed_at = %s, output_data = %s, error_message = %s 
+                           WHERE task_id = %s""",
+                        (status, now, json.dumps(output_data or {}), error_message, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE smart_entity_tasks SET status = %s WHERE task_id = %s",
+                        (status, task_id)
+                    )
+                
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新任务状态失败：{e}")
+        return False
+
+
+def increment_task_attempt(task_id: str) -> bool:
+    """增加任务重试次数"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE smart_entity_tasks SET attempt_count = attempt_count + 1 WHERE task_id = %s",
+                    (task_id,)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"增加任务重试次数失败：{e}")
         return False

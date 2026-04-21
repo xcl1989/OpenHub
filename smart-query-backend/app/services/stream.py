@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,32 @@ _FALLBACK_DEFAULT = {"modelID": "MiniMax-M2.7", "providerID": "minimax"}
 _default_model_cache: Optional[dict] = None
 _cache_timestamp: float = 0
 _CACHE_TTL: float = 30.0
+
+
+def sync_skill_permissions(workspace_path: str, user_id: int):
+    try:
+        permissions = database.get_user_skill_permissions(user_id)
+        if not permissions:
+            return
+        skills_dir = Path(workspace_path) / ".opencode" / "skills"
+        if not skills_dir.is_dir():
+            return
+        for perm in permissions:
+            skill_name = perm.get("skill_name", "")
+            action = perm.get("user_action", "allow")
+            skill_dir = skills_dir / skill_name
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            disabled_md = skill_dir / "SKILL.md.disabled"
+            if action == "deny":
+                if skill_md.exists() and not disabled_md.exists():
+                    os.rename(skill_md, disabled_md)
+            else:
+                if disabled_md.exists():
+                    os.rename(disabled_md, skill_md)
+    except Exception as e:
+        logger.warning("同步技能权限失败: %s", e)
 
 
 def _write_log(log_file: Path, content: str):
@@ -279,6 +306,9 @@ async def _background_collector(
                         }
                     )
 
+            if user_id and workspace_path:
+                await asyncio.to_thread(sync_skill_permissions, workspace_path, user_id)
+
             prompt_response, actual_model = await try_prompt_with_failover(
                 client,
                 session_id,
@@ -313,6 +343,7 @@ async def _background_collector(
             pushed_message_starts: set[str] = set()
             last_content_time = time.monotonic()
             CONTENT_TIMEOUT = 60.0
+            waiting_for_question = False
 
             await asyncio.to_thread(
                 _write_log,
@@ -343,7 +374,7 @@ async def _background_collector(
                     break
 
                 now = time.monotonic()
-                if now - last_content_time > CONTENT_TIMEOUT:
+                if now - last_content_time > CONTENT_TIMEOUT and not waiting_for_question:
                     timeout_msg = (
                         f"模型响应超时（{CONTENT_TIMEOUT:.0f}秒内无内容），请重试"
                     )
@@ -736,6 +767,8 @@ async def _push_event_to_queue(
             await queue.put(f"data: {json.dumps(msg)}\n\n")
 
     elif event_type == "question.asked":
+        waiting_for_question = True
+        last_content_time = time.monotonic()
         msg = {
             "type": "question.asked",
             **properties,

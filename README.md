@@ -22,6 +22,8 @@
 
 **Scheduled Tasks** — Create cron-based tasks via chat or UI. The AI sets up the schedule, executes tasks on time, and notifies users of results. Supports edit, pause, resume, and manual trigger.
 
+**Smart Entity Collaboration** — Create AI agents (smart entities) with specific capabilities and collaboration configs. Delegate complex tasks between entities via natural language. Auto-accept tasks, track execution status, and view formatted results in the Task Center. Supports entity discovery, task lifecycle management (pending → processing → completed), and role-based permissions (delegator / delegatee / executor).
+
 ---
 
 ## Architecture
@@ -43,7 +45,7 @@
 
 Key design: backend proxies all requests through one opencode instance, using `?directory={workspace_path}` to isolate users. Each workspace has its own skills, tools, memory files, and git history.
 
-Plus: model failover chains, scheduled tasks (cron), SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
+Plus: model failover chains, scheduled tasks (cron), smart entity collaboration, SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
 
 ---
 
@@ -96,6 +98,38 @@ Plus: model failover chains, scheduled tasks (cron), SSE streaming, tool permiss
 - First commit (workspace init) cannot be undone — button is disabled in UI
 - Supports undo all files or a single file
 - Undo always auto-saves current state first (no data loss)
+
+---
+
+## Smart Entity Collaboration
+
+```
+ User creates a smart entity (agent) with name, description, and capabilities
+                    ↓
+ Entity registers with collaboration config (auto-accept, timeout, permissions)
+                    ↓
+ User delegates task via chat: "Ask agent001 to analyze 2025 revenue"
+                    ↓
+ smart_entity_delegate tool creates task → stored in MySQL
+                    ↓
+ Auto-accept? → Spawn session in target workspace → Execute with entity's context
+                    ↓
+ Poll session every 30s until finish=stop → Save result
+                    ↓
+ Task Center shows: delegator / delegatee / executor / result with markdown
+```
+
+| Field | Description |
+|-------|-------------|
+| **Delegator** | User who creates and sends the task |
+| **Delegatee** | User who receives the task (owner of target entity) |
+| **Executor** | Smart entity that actually performs the work |
+| **Status** | pending → accepted → processing → completed / failed |
+
+- Entities can auto-accept tasks based on collaboration config
+- Task execution spawns isolated session with entity's memory context
+- Results formatted with markdown tables, support GFM syntax
+- Full task lifecycle visible in Task Center UI with role-based filtering
 
 ---
 
