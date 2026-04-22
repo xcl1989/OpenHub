@@ -168,7 +168,7 @@ function SmartEntityTaskCenter({ open, onClose, isMobile }) {
 
   return (
     <Drawer
-      title={<Space><TeamOutlined /><span>协作任务中心</span></Space>}
+      title={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TeamOutlined /><span>协作任务中心</span></div>}
       placement="right"
       width={width}
       onClose={onClose}

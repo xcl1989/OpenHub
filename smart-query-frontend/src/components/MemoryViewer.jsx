@@ -89,10 +89,10 @@ function MemoryViewer({ open, onClose, isMobile }) {
   return (
     <Drawer
       title={
-        <Space>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <BookOutlined />
           <span>跨会话记忆</span>
-        </Space>
+        </div>
       }
       placement="right"
       width={width}

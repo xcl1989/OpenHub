@@ -131,10 +131,10 @@ function UserSkillManager({ open, onClose, isMobile }) {
   return (
     <Drawer
       title={
-        <Space>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ThunderboltOutlined />
           <span>技能管理</span>
-        </Space>
+        </div>
       }
       placement="right"
       width={width}

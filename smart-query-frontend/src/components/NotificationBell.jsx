@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Badge, Popover, List, Typography, Space, Tag, Tabs } from 'antd';
+import { Badge, Popover, Drawer, Typography, Tabs } from 'antd';
 import { BellOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { notificationService } from '../services/api';
 
@@ -16,9 +16,17 @@ function NotificationBell() {
   const [readNotifications, setReadNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('unread');
+  const [isMobile, setIsMobile] = useState(false);
   const esRef = useRef(null);
   const reconnectDelayRef = useRef(5000);
   const reconnectTimerRef = useRef(null);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const fetchUnread = useCallback(async () => {
     try {
@@ -93,7 +101,22 @@ function NotificationBell() {
 
   const unreadCount = notifications.length;
 
-  const tabContentStyle = { maxHeight: 360, overflowY: 'auto' };
+  const tabContentStyle = isMobile
+    ? { maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }
+    : { maxHeight: 360, overflowY: 'auto' };
+
+  const formatTime = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)}天前`;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   const renderNotificationList = (list) => (
     <div style={tabContentStyle}>
@@ -102,48 +125,153 @@ function NotificationBell() {
           暂无消息
         </div>
       ) : (
-        <List
-          size="small"
-          dataSource={list}
-          renderItem={(item) => (
-            <List.Item
-              style={{ cursor: 'pointer', padding: '8px 12px' }}
+        <div>
+          {list.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                cursor: 'pointer',
+                padding: isMobile ? '12px 16px' : '10px 14px',
+                borderBottom: '1px solid #f0f0f0',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: isMobile ? 10 : 8,
+              }}
               onClick={() => !item.is_read && handleMarkRead(item.id)}
             >
-              <List.Item.Meta
-                title={
-                  <Space>
-                    <ClockCircleOutlined style={{ color: '#1890ff' }} />
-                    <Text strong style={{ fontSize: 13 }}>
-                      {item.task_name || '定时任务'}
-                    </Text>
-                    {!item.is_read && <Tag color="blue" style={{ fontSize: 10 }}>未读</Tag>}
-                  </Space>
-                }
-                description={
-                  <div>
-                    <Text
-                      type="secondary"
-                      style={{ fontSize: 12 }}
-                      ellipsis={{ rows: 2 }}
+              <div
+                style={{
+                  width: isMobile ? 32 : 28,
+                  height: isMobile ? 32 : 28,
+                  borderRadius: '50%',
+                  background: '#e6f4ff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  marginTop: 2,
+                }}
+              >
+                <ClockCircleOutlined style={{ color: '#1890ff', fontSize: isMobile ? 14 : 12 }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 2,
+                  }}
+                >
+                  <Text
+                    strong
+                    style={{
+                      fontSize: isMobile ? 15 : 13,
+                      lineHeight: 1.4,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {item.task_name || '定时任务'}
+                  </Text>
+                  {!item.is_read && (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        lineHeight: '16px',
+                        height: 18,
+                        padding: '0 6px',
+                        borderRadius: 4,
+                        background: '#e6f4ff',
+                        color: '#1890ff',
+                        border: '1px solid #91caff',
+                        flexShrink: 0,
+                      }}
                     >
-                      {item.result_preview || '执行完成'}
-                    </Text>
-                    <br />
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {item.created_at}
-                    </Text>
-                  </div>
-                }
-              />
-            </List.Item>
-          )}
-        />
+                      未读
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: isMobile ? 13 : 12,
+                    color: '#8c8c8c',
+                    lineHeight: 1.5,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    display: '-webkit-box',
+                    WebkitLineClamp: isMobile ? 1 : 2,
+                    WebkitBoxOrient: 'vertical',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {item.result_preview || '执行完成'}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: '#bfbfbf',
+                    marginTop: 4,
+                  }}
+                >
+                  {formatTime(item.created_at)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 
-  const content = (
+  const tabBar = (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '8px 12px',
+        borderBottom: '1px solid #f0f0f0',
+      }}
+    >
+      {[
+        { key: 'unread', label: `未读${unreadCount > 0 ? ` ${unreadCount}` : ''}` },
+        { key: 'read', label: '已读' },
+      ].map((t) => (
+        <div
+          key={t.key}
+          onClick={() => {
+            setActiveTab(t.key);
+            if (t.key === 'read') fetchRead();
+          }}
+          style={{
+            flex: 1,
+            textAlign: 'center',
+            padding: '6px 0',
+            borderRadius: 6,
+            fontSize: 13,
+            fontWeight: activeTab === t.key ? 600 : 400,
+            color: activeTab === t.key ? '#1677ff' : '#595959',
+            background: activeTab === t.key ? '#e6f4ff' : 'transparent',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+        >
+          {t.label}
+        </div>
+      ))}
+    </div>
+  );
+
+  const content = isMobile ? (
+    <div style={{ width: '100%' }}>
+      {tabBar}
+      {activeTab === 'unread'
+        ? renderNotificationList(notifications)
+        : renderNotificationList(readNotifications)}
+    </div>
+  ) : (
     <div style={{ width: 380 }}>
       <Tabs
         activeKey={activeTab}
@@ -167,23 +295,50 @@ function NotificationBell() {
     </div>
   );
 
+  const bell = (
+    <Badge count={unreadCount} size="small" offset={[-2, 2]}>
+      <BellOutlined
+        style={{ fontSize: 16, cursor: 'pointer' }}
+        onClick={() => isMobile && setOpen(true)}
+      />
+    </Badge>
+  );
+
+  const titleNode = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <BellOutlined />
+      <span>定时任务通知</span>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <>
+        {bell}
+        <Drawer
+          title={titleNode}
+          placement="right"
+          open={open}
+          onClose={() => setOpen(false)}
+          width="85vw"
+          bodyStyle={{ padding: 0 }}
+        >
+          {content}
+        </Drawer>
+      </>
+    );
+  }
+
   return (
     <Popover
       content={content}
-      title={
-        <Space>
-          <BellOutlined />
-          <span>定时任务通知</span>
-        </Space>
-      }
+      title={titleNode}
       trigger="click"
       open={open}
       onOpenChange={setOpen}
       placement="bottomRight"
     >
-      <Badge count={unreadCount} size="small" offset={[-2, 2]}>
-        <BellOutlined style={{ fontSize: 16, cursor: 'pointer' }} />
-      </Badge>
+      {bell}
     </Popover>
   );
 }

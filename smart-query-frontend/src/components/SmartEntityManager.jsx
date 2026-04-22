@@ -100,7 +100,7 @@ function SmartEntityManager({ open, onClose, isMobile }) {
   return (
     <>
       <Drawer
-        title={<Space><RobotOutlined /><span>智能体管理</span></Space>}
+        title={<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><RobotOutlined /><span>智能体管理</span></div>}
         placement="right"
         width={width}
         onClose={onClose}

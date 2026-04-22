@@ -243,10 +243,10 @@ function TaskManager({ open, onClose, isMobile }) {
   return (
     <Drawer
       title={
-        <Space>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ClockCircleOutlined />
           <span>任务管理</span>
-        </Space>
+        </div>
       }
       placement="right"
       width={width}

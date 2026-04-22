@@ -1921,6 +1921,23 @@ const SmartQueryPage = () => {
           <span className="toolbar-btn-text">记忆</span>
         </Button>
         <Button
+          icon={<RollbackOutlined />}
+          onClick={() => {
+            setFileManagerVisible(false);
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setMemoryViewerVisible(false);
+            setSmartEntityManagerVisible(false);
+            setSmartEntityTaskCenterVisible(false);
+            setTimeMachineVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="时光机"
+        >
+          <span className="toolbar-btn-text">时光机</span>
+        </Button>
+        <Button
           icon={<RobotOutlined />}
           onClick={() => {
             setSkillManagerVisible(false);

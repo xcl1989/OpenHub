@@ -143,6 +143,8 @@ def get_diff_summary(workspace_path: str) -> list[dict]:
                 added = int(parts[0]) if parts[0] != "-" else 0
                 removed = int(parts[1]) if parts[1] != "-" else 0
                 path = parts[2]
+                if _is_ignored_snapshot_path(path):
+                    continue
                 summary.append({"path": path, "added": added, "removed": removed})
         return summary
     except Exception:
@@ -215,6 +217,16 @@ def restore_single_file(workspace_path: str, commit_hash: str, file_path: str) -
         return None
 
 
+IGNORED_SNAPSHOT_PATHS = {"logs/", ".vite/", "__pycache__/", ".ruff_cache/"}
+
+
+def _is_ignored_snapshot_path(path: str) -> bool:
+    for prefix in IGNORED_SNAPSHOT_PATHS:
+        if path.startswith(prefix):
+            return True
+    return False
+
+
 def get_snapshot_diff(workspace_path: str, commit_hash: str) -> list[dict]:
     if not is_git_repo(workspace_path):
         return []
@@ -229,8 +241,11 @@ def get_snapshot_diff(workspace_path: str, commit_hash: str) -> list[dict]:
         for line in result.stdout.strip().splitlines():
             parts = line.split("\t")
             if len(parts) >= 3:
+                path = parts[2]
+                if _is_ignored_snapshot_path(path):
+                    continue
                 summary.append({
-                    "path": parts[2],
+                    "path": path,
                     "added": int(parts[0]) if parts[0] != "-" else 0,
                     "removed": int(parts[1]) if parts[1] != "-" else 0,
                 })

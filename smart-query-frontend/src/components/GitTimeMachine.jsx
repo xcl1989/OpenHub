@@ -26,13 +26,13 @@ const LINE_STYLES = {
   context: { color: '#595959' },
 };
 
-function DiffBlock({ lines }) {
+function DiffBlock({ lines, isMobile }) {
   return (
     <div style={{
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 12,
+      fontSize: isMobile ? 11 : 12,
       lineHeight: 1.6,
-      maxHeight: 400,
+      maxHeight: isMobile ? '60vh' : 400,
       overflow: 'auto',
       borderTop: '1px solid #f0f0f0',
     }}>
@@ -41,7 +41,7 @@ function DiffBlock({ lines }) {
           key={line.num}
           style={{
             ...LINE_STYLES[line.type],
-            padding: '0 12px',
+            padding: isMobile ? '0 8px' : '0 12px',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
           }}
@@ -284,7 +284,9 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
         open={detailVisible}
         onCancel={() => { setDetailVisible(false); setDetailData(null); setExpandedDiffs({}); }}
         footer={null}
-        width={780}
+        width={isMobile ? '95vw' : 780}
+        style={{ top: isMobile ? 20 : 50 }}
+        bodyStyle={{ padding: isMobile ? 12 : 24, maxHeight: isMobile ? '80vh' : '70vh', overflowY: 'auto' }}
       >
         {detailLoading ? (
           <Spin style={{ display: 'block', margin: '40px auto' }} />
@@ -299,10 +301,10 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
             <div style={{ marginBottom: 16, padding: 12, background: '#f5f5f5', borderRadius: 6 }}>
               <Text>{detailData.full_message || detailData.commit_message}</Text>
             </div>
-            {(detailData.diff || []).length > 0 ? (
+            {(detailData.diff_summary || detailData.diff || []).length > 0 ? (
               <div>
                 <Text strong style={{ marginBottom: 8, display: 'block' }}>文件变更：</Text>
-                {(detailData.diff || []).map((f, i) => {
+                {(detailData.diff_summary || detailData.diff || []).map((f, i) => {
                   const diffKey = `${commitHash}:${f.path}`;
                   const isExpanded = !!expandedDiffs[diffKey];
                   const rawDiff = diffCache[diffKey];
@@ -420,10 +422,10 @@ function GitTimeMachine({ open, onClose, isMobile, currentSessionId }) {
     <>
       <Drawer
         title={
-          <Space>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <HistoryOutlined />
             <span>时光机</span>
-          </Space>
+          </div>
         }
         placement="right"
         width={width}

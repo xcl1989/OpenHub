@@ -1193,13 +1193,15 @@ def get_git_snapshots(
                 rows = cursor.fetchall()
                 result = []
                 for row in rows:
+                    diff_summary = json.loads(row["diff_summary"]) if row["diff_summary"] else []
+                    diff_summary = [d for d in diff_summary if not d.get("path", "").startswith(("logs/", ".vite/", "__pycache__/", ".ruff_cache/"))]
                     result.append({
                         "id": row["id"],
                         "session_id": row["session_id"],
                         "turn_id": row["turn_id"],
                         "commit_hash": row["commit_hash"],
                         "commit_message": row["commit_message"],
-                        "diff_summary": json.loads(row["diff_summary"]) if row["diff_summary"] else [],
+                        "diff_summary": diff_summary,
                         "files_changed": row["files_changed"],
                         "is_auto_restore": row["is_auto_restore"],
                         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
@@ -1228,13 +1230,15 @@ def get_git_snapshot_by_hash(commit_hash: str, user_id: int) -> Optional[dict]:
                 row = cursor.fetchone()
                 if not row:
                     return None
+                diff_summary = json.loads(row["diff_summary"]) if row["diff_summary"] else []
+                diff_summary = [d for d in diff_summary if not d.get("path", "").startswith(("logs/", ".vite/", "__pycache__/", ".ruff_cache/"))]
                 return {
                     "id": row["id"],
                     "session_id": row["session_id"],
                     "turn_id": row["turn_id"],
                     "commit_hash": row["commit_hash"],
                     "commit_message": row["commit_message"],
-                    "diff_summary": json.loads(row["diff_summary"]) if row["diff_summary"] else [],
+                    "diff_summary": diff_summary,
                     "files_changed": row["files_changed"],
                     "is_auto_restore": row["is_auto_restore"],
                     "created_at": row["created_at"].isoformat() if row["created_at"] else None,
