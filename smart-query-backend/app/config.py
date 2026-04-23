@@ -32,5 +32,10 @@ class Config:
 
     INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
 
+    ENTERPRISE_KB_PATH = os.getenv(
+        "ENTERPRISE_KB_PATH",
+        str(Path(__file__).parent.parent / "enterprise-knowledge"),
+    )
+
 
 config = Config()

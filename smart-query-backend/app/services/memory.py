@@ -21,11 +21,12 @@ def build_memory_context(workspace_path: str, max_chars: int = MAX_INJECT_CHARS)
         if file_path.exists():
             try:
                 content = file_path.read_text(encoding="utf-8").strip()
-                if content:
+                cleaned = _clean_memory_content(content)
+                if cleaned:
                     if memory_type == "facts":
-                        parts.append(f"[事实记忆]\n{content}")
+                        parts.append(f"[事实记忆]\n{cleaned}")
                     else:
-                        parts.append(f"[用户偏好]\n{content}")
+                        parts.append(f"[用户偏好]\n{cleaned}")
             except Exception:
                 pass
 
@@ -36,6 +37,14 @@ def build_memory_context(workspace_path: str, max_chars: int = MAX_INJECT_CHARS)
     if len(context) > max_chars:
         context = context[:max_chars] + "\n\n[记忆内容已截断，超出最大长度限制]"
     return context
+
+
+def _clean_memory_content(content: str) -> str:
+    import re
+    cleaned = re.sub(r'<!--.*?-->', '', content).strip()
+    cleaned = re.sub(r'# MEMORY\.md|# USER\.md', '', cleaned).strip()
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned
 
 
 def save_memory(workspace_path: str, memory_type: str, content: str) -> dict:

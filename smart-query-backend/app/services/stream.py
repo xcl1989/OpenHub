@@ -14,6 +14,7 @@ from app.services.opencode_client import opencode_client
 from app.services.model_failover import try_prompt_with_failover
 from app.services import memory
 from app.services import git_snapshot as git_snap
+from app.services.knowledge import build_knowledge_context
 from app.models.query import ImageData
 
 logger = logging.getLogger(__name__)
@@ -278,8 +279,21 @@ async def _background_collector(
             memory_ctx = await asyncio.to_thread(
                 memory.build_memory_context, workspace_path
             )
+
+            context_parts = []
+            if user_id:
+                knowledge_ctx = await asyncio.to_thread(
+                    build_knowledge_context, user_id, question
+                )
+                if knowledge_ctx:
+                    context_parts.append(knowledge_ctx)
             if memory_ctx:
-                full_text = f"{memory_ctx}\n\n---\n\n{question}"
+                context_parts.append(memory_ctx)
+
+            if context_parts:
+                context_block = "\n\n".join(context_parts)
+                hint = '如果以上上下文信息不足以回答用户问题，请主动调用 knowledge_knowledge_search 工具搜索知识库获取更多信息，不要直接告诉用户"信息不足"。'
+                full_text = f"<context>\n{context_block}\n</context>\n{hint}\n\n{question}"
             else:
                 full_text = question
 

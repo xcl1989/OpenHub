@@ -1117,6 +1117,10 @@ def sync_tools_from_opencode() -> list:
         "smart_entity_delegate": ("custom", "向智能体委托任务"),
         "smart_entity_task_list": ("custom", "查看智能体任务列表"),
         "smart_entity_task_action": ("custom", "操作智能体任务（接受/拒绝/取消）"),
+        "knowledge_knowledge_search": ("safe", "搜索知识库"),
+        "knowledge_knowledge_list": ("safe", "列出知识库内容"),
+        "knowledge_knowledge_info": ("safe", "查看知识库概览"),
+        "knowledge_knowledge_save": ("safe", "保存知识到个人知识库"),
     }
     for name, (risk, desc) in builtin_tools.items():
         upsert_tool_permission(name, risk, desc)
@@ -2110,7 +2114,6 @@ def update_smart_entity_task_status(task_id: str, status: str, output_data: dict
 
 
 def increment_task_attempt(task_id: str) -> bool:
-    """增加任务重试次数"""
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -2123,3 +2126,285 @@ def increment_task_attempt(task_id: str) -> bool:
     except Exception as e:
         print(f"增加任务重试次数失败：{e}")
         return False
+
+
+def create_knowledge_base(name: str, description: str, scope: str, owner_id: Optional[int] = None) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO knowledge_bases (name, description, scope, owner_id) VALUES (%s, %s, %s, %s)",
+                    (name, description, scope, owner_id),
+                )
+                kb_id = cursor.lastrowid
+                cursor.execute("SELECT * FROM knowledge_bases WHERE id = %s", (kb_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"创建知识库失败：{e}")
+        return None
+
+
+def get_knowledge_base(kb_id: int) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM knowledge_bases WHERE id = %s", (kb_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取知识库失败：{e}")
+        return None
+
+
+def get_user_knowledge_base(user_id: int) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM knowledge_bases WHERE scope = 'user' AND owner_id = %s AND is_active = 1",
+                    (user_id,),
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取用户知识库失败：{e}")
+        return None
+
+
+def get_enterprise_knowledge_bases() -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM knowledge_bases WHERE scope = 'enterprise' AND is_active = 1 ORDER BY created_at DESC"
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取企业知识库列表失败：{e}")
+        return []
+
+
+def ensure_user_knowledge_base(user_id: int) -> Optional[dict]:
+    kb = get_user_knowledge_base(user_id)
+    if kb:
+        return kb
+    return create_knowledge_base(
+        name=f"用户#{user_id}知识库",
+        description="个人知识库",
+        scope="user",
+        owner_id=user_id,
+    )
+
+
+def update_knowledge_base(kb_id: int, **fields) -> bool:
+    allowed = {"name", "description", "is_active"}
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k} = %s")
+            vals.append(v)
+    if not sets:
+        return False
+    vals.append(kb_id)
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE knowledge_bases SET {', '.join(sets)} WHERE id = %s",
+                    vals,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新知识库失败：{e}")
+        return False
+
+
+def delete_knowledge_base(kb_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM knowledge_bases WHERE id = %s", (kb_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除知识库失败：{e}")
+        return False
+
+
+def create_knowledge_source(
+    kb_id: int,
+    title: str,
+    source_type: str,
+    scope: str,
+    file_path: Optional[str] = None,
+    original_filename: Optional[str] = None,
+    content: Optional[str] = None,
+    tags: Optional[list] = None,
+) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO knowledge_sources 
+                       (kb_id, title, source_type, scope, file_path, original_filename, content, char_count, tags)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        kb_id,
+                        title,
+                        source_type,
+                        scope,
+                        file_path,
+                        original_filename,
+                        content,
+                        len(content) if content else 0,
+                        json.dumps(tags) if tags else None,
+                    ),
+                )
+                source_id = cursor.lastrowid
+                cursor.execute(
+                    "UPDATE knowledge_bases SET total_sources = total_sources + 1, total_chars = total_chars + %s, updated_at = NOW() WHERE id = %s",
+                    (len(content) if content else 0, kb_id),
+                )
+                conn.commit()
+                cursor.execute("SELECT * FROM knowledge_sources WHERE id = %s", (source_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"创建知识源失败：{e}")
+        return None
+
+
+def get_knowledge_source(source_id: int) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM knowledge_sources WHERE id = %s", (source_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取知识源失败：{e}")
+        return None
+
+
+def get_knowledge_sources(kb_id: int, active_only: bool = True) -> list:
+    sql = "SELECT * FROM knowledge_sources WHERE kb_id = %s"
+    if active_only:
+        sql += " AND is_active = 1"
+    sql += " ORDER BY created_at DESC"
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, (kb_id,))
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取知识源列表失败：{e}")
+        return []
+
+
+def get_enterprise_sources() -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM knowledge_sources WHERE scope = 'enterprise' AND is_active = 1 ORDER BY created_at DESC"
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取企业知识源失败：{e}")
+        return []
+
+
+def update_knowledge_source(source_id: int, **fields) -> bool:
+    allowed = {"title", "content", "tags", "is_active"}
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if k in allowed:
+            if k == "tags":
+                sets.append("tags = %s")
+                vals.append(json.dumps(v) if v else None)
+            elif k == "content":
+                sets.append("content = %s, char_count = %s")
+                vals.extend([v, len(v) if v else 0])
+            else:
+                sets.append(f"{k} = %s")
+                vals.append(v)
+    if not sets:
+        return False
+    vals.append(source_id)
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE knowledge_sources SET {', '.join(sets)} WHERE id = %s",
+                    vals,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新知识源失败：{e}")
+        return False
+
+
+def delete_knowledge_source(source_id: int) -> bool:
+    source = get_knowledge_source(source_id)
+    if not source:
+        return False
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM knowledge_sources WHERE id = %s", (source_id,))
+                cursor.execute(
+                    "UPDATE knowledge_bases SET total_sources = GREATEST(total_sources - 1, 0), total_chars = GREATEST(total_chars - %s, 0), updated_at = NOW() WHERE id = %s",
+                    (source.get("char_count", 0), source["kb_id"]),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除知识源失败：{e}")
+        return False
+
+
+def search_knowledge_sources(query: str, scope: Optional[str] = None, kb_id: Optional[int] = None, limit: int = 10) -> list:
+    conditions = ["is_active = 1"]
+    params = []
+    if scope:
+        conditions.append("scope = %s")
+        params.append(scope)
+    if kb_id:
+        conditions.append("kb_id = %s")
+        params.append(kb_id)
+
+    import re
+    raw = query.strip()
+    words = [w for w in re.split(r'[\s,，、]+', raw) if w]
+    if not words:
+        return []
+
+    all_keywords = set()
+    for word in words:
+        w = word.lower()
+        all_keywords.add(w)
+        no_space = w.replace(' ', '').replace('　', '')
+        if no_space != w:
+            all_keywords.add(no_space)
+        if len(no_space) > 6 and ' ' not in w:
+            # 中文长词滑动窗口提取2-4字子串作为关键词
+            for i in range(len(no_space) - 1):
+                for j in range(i + 2, min(i + 5, len(no_space) + 1)):
+                    all_keywords.add(no_space[i:j])
+
+    search_conditions = []
+    for kw in sorted(all_keywords, key=len, reverse=True)[:8]:
+        search_conditions.append("(LOWER(title) LIKE %s OR LOWER(content) LIKE %s OR LOWER(REPLACE(REPLACE(title, ' ', ''), '　', '')) LIKE %s OR LOWER(REPLACE(REPLACE(content, ' ', ''), '　', '')) LIKE %s)")
+        params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", f"%{kw}%"])
+    conditions.append(f"({' OR '.join(search_conditions)})")
+
+    params.append(limit)
+    sql = f"SELECT * FROM knowledge_sources WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT %s"
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, params)
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"搜索知识源失败：{e}")
+        return []

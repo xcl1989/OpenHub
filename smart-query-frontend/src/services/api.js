@@ -774,3 +774,93 @@ export const smartEntityTaskService = {
     return response.data;
   },
 };
+
+export const knowledgeService = {
+  getBase: async () => {
+    const response = await apiClient.get('/knowledge/base');
+    return response.data;
+  },
+  listSources: async () => {
+    const response = await apiClient.get('/knowledge/sources');
+    return response.data;
+  },
+  createSource: async (data) => {
+    const response = await apiClient.post('/knowledge/sources', data);
+    return response.data;
+  },
+  uploadSource: async (title, file, tags) => {
+    const formData = new FormData();
+    formData.append('title', title);
+    formData.append('file', file);
+    if (tags) formData.append('tags', tags);
+    const response = await apiClient.post('/knowledge/sources/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  updateSource: async (sourceId, data) => {
+    const response = await apiClient.put(`/knowledge/sources/${sourceId}`, data);
+    return response.data;
+  },
+  deleteSource: async (sourceId) => {
+    const response = await apiClient.delete(`/knowledge/sources/${sourceId}`);
+    return response.data;
+  },
+  search: async (q) => {
+    const response = await apiClient.get('/knowledge/search', { params: { q } });
+    return response.data;
+  },
+  getStats: async () => {
+    const response = await apiClient.get('/knowledge/stats');
+    return response.data;
+  },
+};
+
+export const adminKnowledgeService = {
+  listBases: async () => {
+    const response = await apiClient.get('/admin/knowledge/bases');
+    return response.data;
+  },
+  createBase: async (data) => {
+    const response = await apiClient.post('/admin/knowledge/bases', data);
+    return response.data;
+  },
+  updateBase: async (kbId, data) => {
+    const response = await apiClient.put(`/admin/knowledge/bases/${kbId}`, data);
+    return response.data;
+  },
+  deleteBase: async (kbId) => {
+    const response = await apiClient.delete(`/admin/knowledge/bases/${kbId}`);
+    return response.data;
+  },
+  listSources: async (kbId) => {
+    const response = await apiClient.get(`/admin/knowledge/bases/${kbId}/sources`);
+    return response.data;
+  },
+  createSource: async (kbId, data) => {
+    const response = await apiClient.post(`/admin/knowledge/bases/${kbId}/sources`, data);
+    return response.data;
+  },
+  uploadSource: async (kbId, title, file, tags) => {
+    const formData = new FormData();
+    formData.append('title', title);
+    formData.append('file', file);
+    if (tags) formData.append('tags', tags);
+    const response = await apiClient.post(`/admin/knowledge/bases/${kbId}/sources/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  updateSource: async (sourceId, data) => {
+    const response = await apiClient.put(`/admin/knowledge/sources/${sourceId}`, data);
+    return response.data;
+  },
+  deleteSource: async (sourceId) => {
+    const response = await apiClient.delete(`/admin/knowledge/sources/${sourceId}`);
+    return response.data;
+  },
+  search: async (q) => {
+    const response = await apiClient.get('/admin/knowledge/search', { params: { q } });
+    return response.data;
+  },
+};

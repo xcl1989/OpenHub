@@ -353,6 +353,45 @@ TABLES = {
             INDEX idx_entity (entity_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "knowledge_bases": """
+        CREATE TABLE IF NOT EXISTS knowledge_bases (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            scope ENUM('enterprise', 'user') NOT NULL DEFAULT 'user',
+            owner_id INT DEFAULT NULL,
+            is_active TINYINT DEFAULT 1,
+            total_sources INT DEFAULT 0,
+            total_chars BIGINT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_scope (scope),
+            INDEX idx_owner (owner_id),
+            INDEX idx_scope_active (scope, is_active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "knowledge_sources": """
+        CREATE TABLE IF NOT EXISTS knowledge_sources (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            kb_id INT NOT NULL,
+            title VARCHAR(500) NOT NULL,
+            source_type ENUM('markdown', 'pdf', 'docx', 'txt', 'url', 'xlsx', 'csv') NOT NULL DEFAULT 'markdown',
+            scope ENUM('enterprise', 'user') NOT NULL DEFAULT 'user',
+            file_path VARCHAR(1000) DEFAULT NULL,
+            original_filename VARCHAR(500) DEFAULT NULL,
+            content LONGTEXT,
+            char_count INT DEFAULT 0,
+            tags JSON DEFAULT NULL,
+            is_active TINYINT DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+            INDEX idx_kb_id (kb_id),
+            INDEX idx_scope (scope),
+            INDEX idx_scope_active (scope, is_active),
+            FULLTEXT INDEX ft_title_content (title, content)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 

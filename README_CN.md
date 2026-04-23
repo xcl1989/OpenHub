@@ -18,6 +18,8 @@
 
 **跨会话记忆** — AI 会记住你。自动将项目事实和用户偏好保存为工作空间中的 Markdown 文件。每次新对话时，记忆上下文自动注入 prompt——无需反复说明。
 
+**Agentic 知识库** — 双层级知识体系：企业知识库（全局、管理员维护）+ 用户知识库（私有、按用户隔离）。BM25+TF-IDF 混合搜索引擎，支持中文 n-gram 分词。知识通过 `<context>` 标签自动注入 prompt，上下文不足时 AI 会主动搜索知识库——无需向量数据库。
+
 **Git 时光机** — 每个工作空间都是 git 仓库。每轮对话自动提交快照。用户可以浏览变更、查看 diff、一键撤销任意修改。撤销前自动保存当前状态，不丢失任何内容。
 
 **定时任务** — 通过对话或 UI 创建 cron 定时任务。AI 自动设置调度、按时执行、结果通知用户。支持编辑、暂停、恢复和手动触发。
@@ -30,22 +32,23 @@
 
 ```
  前端 (:3000)  ──▶  后端 (:8000)  ──▶  opencode serve (:4096)
-                                            ┌──── ?directory= ────┐
-                                            │                      │
-                                   workspace/admin/       workspace/alice/
-                                   ├── .opencode/         ├── .opencode/
-                                   │   ├── skills/        │   ├── skills/
-                                   │   └── tools/         │   └── tools/
-                                   ├── MEMORY.md          ├── MEMORY.md
-                                   ├── USER.md            ├── USER.md
-                                   └── (git 仓库)         └── (git 仓库)
+                                             ┌──── ?directory= ────┐
+                                             │                      │
+                                    workspace/admin/       workspace/alice/
+                                    ├── .opencode/         ├── .opencode/
+                                    │   ├── skills/        │   ├── skills/
+                                    │   └── tools/         │   └── tools/
+                                    ├── MEMORY.md          ├── MEMORY.md
+                                    ├── USER.md            ├── USER.md
+                                    └── (git 仓库)         └── (git 仓库)
 
  MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks
+         knowledge_bases · knowledge_sources
 ```
 
 核心设计：后端代理所有请求到同一个 opencode 实例，通过 `?directory={workspace_path}` 隔离用户。每个工作空间拥有独立的技能、工具、记忆文件和 git 历史。
 
-此外还支持：模型兜底链、定时任务（cron）、智能体协作、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
+此外还支持：模型兜底链、定时任务（cron）、智能体协作、Agentic 知识库、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
 
 ---
 
@@ -73,6 +76,83 @@
 - **读取**：每次 prompt 通过 `build_memory_context()` 自动注入（上限 2000 字符）
 - **定时任务**：任务的 prompt 也会自动注入记忆上下文
 - **前端**：只读查看器（Drawer），管理员可按用户开启/关闭记忆工具
+
+---
+
+## Agentic 知识库
+
+```
+  ┌─────────────────────────────────────────────────────────┐
+  │                    用户发送问题                            │
+  └─────────────┬───────────────────────────┬───────────────┘
+                ↓                           ↓
+     ┌──────────────────┐        ┌──────────────────────┐
+     │   用户知识库       │        │    企业知识库          │
+     │ （按用户，MySQL）   │        │  （全局，MySQL）       │
+     └────────┬─────────┘        └──────────┬───────────┘
+              ↓                              ↓
+     小知识库 → 全量注入              始终 → BM25+TF-IDF 搜索
+     大知识库 → 搜索检索              最多 1 条结果，每条 400 字
+              ↓                              ↓
+     ┌──────────────────────────────────────────────────────┐
+     │  build_knowledge_context() → <context> XML 注入       │
+     │  总量上限 1200 字符 + 主动搜索提示                      │
+     └──────────────────────┬───────────────────────────────┘
+                            ↓
+     ┌──────────────────────────────────────────────────────┐
+     │  AI 检查上下文 → 足够？→ 直接回答                       │
+     │                  不足？→ 主动调用                       │
+     │                  knowledge_knowledge_search          │
+     └──────────────────────────────────────────────────────┘
+```
+
+### 双层级架构
+
+| 层级 | 范围 | 管理方式 | 存储 |
+|------|------|---------|------|
+| **用户知识库** | 私有，按用户隔离 | 用户通过 Drawer UI 自助管理 | MySQL `knowledge_sources` 表 |
+| **企业知识库** | 全局，所有用户可用 | 管理员通过管理后台统一管理 | MySQL + `enterprise-knowledge/` 目录 |
+
+### 注入策略
+
+| 条件 | 用户知识库 | 企业知识库 |
+|------|-----------|-----------|
+| 用户知识库 ≤ 1500 字符 | 全量注入 | 搜索检索（最多 1 条） |
+| 用户知识库 > 1500 字符 | 搜索检索（最多 2 条） | 搜索检索（最多 1 条） |
+| 总量限制 | 1200 字符，每条来源 400 字 | 同左 |
+
+知识内容以 `<context>` XML 标签包装，与用户实际问题分开。末尾附加提示：*"如果上下文信息不足以回答用户问题，请主动搜索知识库。"*
+
+### 搜索引擎
+
+- **算法**：BM25（权重 0.7）+ TF-IDF（权重 0.3）混合排序
+- **分词**：中文 unigram/bigram/trigram + 空格分词
+- **流程**：MySQL LIKE 预筛选 → Python BM25 重排序
+- **无需向量数据库** —— 纯数据库 + 算法搜索
+
+### 文档处理
+
+| 格式 | 解析器 | 分块策略 |
+|------|--------|---------|
+| Markdown | 原生解析 | 按标题层级分割（##/### 边界） |
+| TXT | 纯文本 | 滑动窗口（300 字符，50 字符重叠） |
+| PDF | PyPDF2 | 按页分割 + 滑动窗口 |
+| DOCX | python-docx | 按段落分割 |
+| XLSX/CSV | openpyxl/pandas | 按行批量分块 |
+
+### MCP 工具
+
+| 工具 | 说明 |
+|------|------|
+| `knowledge_knowledge_search` | 搜索知识库，附主动搜索使用提示 |
+| `knowledge_knowledge_list` | 列出所有可用知识源 |
+| `knowledge_knowledge_info` | 获取知识库概览和统计信息 |
+| `knowledge_knowledge_save` | AI 主动保存重要信息到知识库 |
+
+### 前端
+
+- **用户 Drawer**（`KnowledgeManager.jsx`）：3 个 Tab — 知识列表、统计信息、企业知识库（只读）
+- **管理后台**（`AdminPage.jsx`）：企业知识库增删改、文档上传、知识源管理
 
 ---
 
@@ -183,18 +263,21 @@ OpenHub/
 │   ├── skills/                    # 24 个技能包（模板源）
 │   └── tools/
 │       ├── memory.ts              # 跨会话记忆工具
+│       ├── knowledge.ts           # 知识库工具（search/list/info/save）
 │       └── scheduled-task.ts      # 定时任务工具
 ├── smart-query-backend/           # FastAPI 后端
 │   ├── app/
-│   │   ├── api/                   # auth, query, admin, session, internal
+│   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge
 │   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler
+│   │   ├── services/knowledge/    # parser, chunker, search (BM25+TF-IDF), injector
 │   │   └── core/                  # JWT 认证
+│   ├── enterprise-knowledge/      # 企业知识库存储目录
 │   ├── workspace/{username}/      # 用户工作空间
 │   └── init_db.py
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, GitTimeMachine, ...
+│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ...
 │       └── services/api.js
 └── AGENTS.md
 ```

@@ -53,6 +53,7 @@ import UserSkillManager from '../components/UserSkillManager';
 import TaskManager from '../components/TaskManager';
 import NotificationBell from '../components/NotificationBell';
 import MemoryViewer from '../components/MemoryViewer';
+import KnowledgeManager from '../components/KnowledgeManager';
 import GitTimeMachine from '../components/GitTimeMachine';
 import SmartEntityManager from '../components/SmartEntityManager';
 import SmartEntityTaskCenter from '../components/SmartEntityTaskCenter';
@@ -106,6 +107,7 @@ const SmartQueryPage = () => {
   const [skillManagerVisible, setSkillManagerVisible] = useState(false);
   const [taskManagerVisible, setTaskManagerVisible] = useState(false);
   const [memoryViewerVisible, setMemoryViewerVisible] = useState(false);
+  const [knowledgeManagerVisible, setKnowledgeManagerVisible] = useState(false);
   const [smartEntityManagerVisible, setSmartEntityManagerVisible] = useState(false);
   const [smartEntityTaskCenterVisible, setSmartEntityTaskCenterVisible] = useState(false);
   const [timeMachineVisible, setTimeMachineVisible] = useState(false);
@@ -1628,6 +1630,12 @@ const SmartQueryPage = () => {
         isMobile={isMobile}
       />
 
+      <KnowledgeManager
+        open={knowledgeManagerVisible}
+        onClose={() => setKnowledgeManagerVisible(false)}
+        isMobile={isMobile}
+      />
+
       <GitTimeMachine
         open={timeMachineVisible}
         onClose={() => setTimeMachineVisible(false)}
@@ -1883,6 +1891,7 @@ const SmartQueryPage = () => {
             setMemoryViewerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setKnowledgeManagerVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1897,6 +1906,7 @@ const SmartQueryPage = () => {
             setSkillManagerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setKnowledgeManagerVisible(false);
             setTaskManagerVisible(true);
           }}
           size="small"
@@ -1912,6 +1922,7 @@ const SmartQueryPage = () => {
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setKnowledgeManagerVisible(false);
             setMemoryViewerVisible(true);
           }}
           size="small"
@@ -1919,6 +1930,22 @@ const SmartQueryPage = () => {
           title="记忆"
         >
           <span className="toolbar-btn-text">记忆</span>
+        </Button>
+        <Button
+          icon={<DatabaseOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
+            setMemoryViewerVisible(false);
+            setKnowledgeManagerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="知识库"
+        >
+          <span className="toolbar-btn-text">知识库</span>
         </Button>
         <Button
           icon={<RollbackOutlined />}
@@ -1929,6 +1956,7 @@ const SmartQueryPage = () => {
             setMemoryViewerVisible(false);
             setSmartEntityManagerVisible(false);
             setSmartEntityTaskCenterVisible(false);
+            setKnowledgeManagerVisible(false);
             setTimeMachineVisible(true);
           }}
           size="small"
@@ -1946,6 +1974,8 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityTaskCenterVisible(false);
             setSmartEntityTaskCenterVisible(false);
+            setSmartEntityManagerVisible(false);
+            setKnowledgeManagerVisible(false);
             setSmartEntityManagerVisible(true);
           }}
           size="small"
@@ -1962,6 +1992,7 @@ const SmartQueryPage = () => {
             setMemoryViewerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setKnowledgeManagerVisible(false);
             setSmartEntityTaskCenterVisible(true);
           }}
           size="small"

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, InputNumber, Switch, Space,
   message, Popconfirm, Tag, Typography, Breadcrumb, Spin, Collapse,
-  Menu, Layout, Select, Drawer,
+  Menu, Layout, Select, Drawer, Upload,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
@@ -10,12 +10,13 @@ import {
   ApiOutlined, DownOutlined, UpOutlined,
   SettingOutlined, CloudOutlined, CloudServerOutlined, KeyOutlined,
   BarChartOutlined, SafetyOutlined, ThunderboltOutlined,
-  MenuOutlined,
+  MenuOutlined, DatabaseOutlined, BookOutlined, UploadOutlined,
+  SearchOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import {
   Link, useNavigate, useLocation,
 } from 'react-router-dom';
-import { adminService } from '../services/api';
+import { adminService, adminKnowledgeService } from '../services/api';
 import UsageStats from '../components/UsageStats';
 import ToolPermissionManager from '../components/ToolPermissionManager';
 import SkillManager from '../components/SkillManager';
@@ -1522,6 +1523,313 @@ function OpenCodeService() {
   );
 }
 
+function EnterpriseKnowledgeManager() {
+  const [kbs, setKbs] = useState([]);
+  const [selectedKb, setSelectedKb] = useState(null);
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [addKbModalOpen, setAddKbModalOpen] = useState(false);
+  const [addSourceModalOpen, setAddSourceModalOpen] = useState(false);
+  const [editSourceModalOpen, setEditSourceModalOpen] = useState(false);
+  const [editingSource, setEditingSource] = useState(null);
+  const [kbForm] = Form.useForm();
+  const [sourceForm] = Form.useForm();
+  const [editSourceForm] = Form.useForm();
+
+  useEffect(() => {
+    fetchKbs();
+  }, []);
+
+  const fetchKbs = async () => {
+    setLoading(true);
+    try {
+      const result = await adminKnowledgeService.listBases();
+      if (result.ok) {
+        setKbs(result.kbs || []);
+        if (result.kbs?.length > 0 && !selectedKb) {
+          setSelectedKb(result.kbs[0].id);
+        }
+      }
+    } catch {
+      message.error('获取知识库列表失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedKb) fetchSources();
+  }, [selectedKb]);
+
+  const fetchSources = async () => {
+    if (!selectedKb) return;
+    setLoading(true);
+    try {
+      const result = await adminKnowledgeService.listSources(selectedKb);
+      if (result.ok) {
+        setSources(result.sources || []);
+      }
+    } catch {
+      message.error('获取知识源失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateKb = async () => {
+    try {
+      const values = await kbForm.validateFields();
+      const result = await adminKnowledgeService.createBase(values);
+      if (result.ok) {
+        message.success('创建成功');
+        setAddKbModalOpen(false);
+        kbForm.resetFields();
+        fetchKbs();
+      }
+    } catch (err) {
+      if (err.response) message.error(err.response.data?.detail || '创建失败');
+    }
+  };
+
+  const handleDeleteKb = async (kbId) => {
+    try {
+      await adminKnowledgeService.deleteBase(kbId);
+      message.success('已删除');
+      if (selectedKb === kbId) setSelectedKb(null);
+      fetchKbs();
+    } catch {
+      message.error('删除失败');
+    }
+  };
+
+  const handleCreateSource = async () => {
+    try {
+      const values = await sourceForm.validateFields();
+      const result = await adminKnowledgeService.createSource(selectedKb, values);
+      if (result.ok) {
+        message.success('添加成功');
+        setAddSourceModalOpen(false);
+        sourceForm.resetFields();
+        fetchSources();
+        fetchKbs();
+      }
+    } catch (err) {
+      if (err.response) message.error(err.response.data?.detail || '添加失败');
+    }
+  };
+
+  const handleUploadSource = async (file) => {
+    const title = file.name.replace(/\.[^.]+$/, '');
+    try {
+      const result = await adminKnowledgeService.uploadSource(selectedKb, title, file);
+      if (result.ok) {
+        message.success('上传解析成功');
+        fetchSources();
+        fetchKbs();
+      }
+    } catch (err) {
+      message.error(err.response?.data?.detail || '上传失败');
+    }
+    return false;
+  };
+
+  const openEditSource = (record) => {
+    setEditingSource(record);
+    editSourceForm.setFieldsValue({
+      title: record.title,
+      content: record.content,
+      tags: record.tags ? record.tags.join(', ') : '',
+      is_active: record.is_active,
+    });
+    setEditSourceModalOpen(true);
+  };
+
+  const handleEditSource = async () => {
+    try {
+      const values = await editSourceForm.validateFields();
+      const result = await adminKnowledgeService.updateSource(editingSource.id, values);
+      if (result.ok) {
+        message.success('更新成功');
+        setEditSourceModalOpen(false);
+        setEditingSource(null);
+        editSourceForm.resetFields();
+        fetchSources();
+      }
+    } catch (err) {
+      if (err.response) message.error(err.response.data?.detail || '更新失败');
+    }
+  };
+
+  const handleDeleteSource = async (sourceId) => {
+    try {
+      await adminKnowledgeService.deleteSource(sourceId);
+      message.success('已删除');
+      fetchSources();
+      fetchKbs();
+    } catch {
+      message.error('删除失败');
+    }
+  };
+
+  const sourceColumns = [
+    {
+      title: '标题',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+      render: (text, record) => (
+        <Space>
+          <FileTextOutlined />
+          <Text strong>{text}</Text>
+          {record.source_type !== 'markdown' && <Tag color="blue">{record.source_type}</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: '字符数',
+      dataIndex: 'char_count',
+      key: 'char_count',
+      width: 90,
+      render: (v) => <Text type="secondary">{v?.toLocaleString()}</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'is_active',
+      key: 'is_active',
+      width: 80,
+      render: (v) => v ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>,
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 100,
+      render: (_, record) => (
+        <Space>
+          <Button type="text" icon={<EditOutlined />} onClick={() => openEditSource(record)} />
+          <Popconfirm title="确定删除？" onConfirm={() => handleDeleteSource(record.id)}>
+            <Button type="text" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <Card title={<Space><DatabaseOutlined /> 企业知识库管理</Space>}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <Space>
+          <Select
+            style={{ width: 200 }}
+            placeholder="选择知识库"
+            value={selectedKb}
+            onChange={setSelectedKb}
+            options={kbs.map(kb => ({ label: `${kb.name} (${kb.total_sources}条)`, value: kb.id }))}
+          />
+          {selectedKb && (
+            <Popconfirm title="确定删除此知识库及其所有内容？" onConfirm={() => handleDeleteKb(selectedKb)}>
+              <Button danger icon={<DeleteOutlined />}>删除库</Button>
+            </Popconfirm>
+          )}
+        </Space>
+        <Space>
+          <Button icon={<PlusOutlined />} onClick={() => setAddKbModalOpen(true)}>新建知识库</Button>
+          {selectedKb && (
+            <>
+              <Upload
+                beforeUpload={handleUploadSource}
+                showUploadList={false}
+                accept=".md,.txt,.pdf,.docx,.xlsx,.csv"
+              >
+                <Button icon={<UploadOutlined />}>上传文件</Button>
+              </Upload>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddSourceModalOpen(true)}>
+                添加知识
+              </Button>
+            </>
+          )}
+        </Space>
+      </div>
+
+      {selectedKb ? (
+        <Table
+          dataSource={sources}
+          columns={sourceColumns}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          pagination={{ pageSize: 10 }}
+        />
+      ) : (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+          请选择或创建一个企业知识库
+        </div>
+      )}
+
+      <Modal
+        title="新建企业知识库"
+        open={addKbModalOpen}
+        onOk={handleCreateKb}
+        onCancel={() => { setAddKbModalOpen(false); kbForm.resetFields(); }}
+        okText="创建"
+      >
+        <Form form={kbForm} layout="vertical">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+            <Input placeholder="如：公司规范文档" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="知识库用途说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="添加企业知识"
+        open={addSourceModalOpen}
+        onOk={handleCreateSource}
+        onCancel={() => { setAddSourceModalOpen(false); sourceForm.resetFields(); }}
+        width={600}
+        okText="添加"
+      >
+        <Form form={sourceForm} layout="vertical">
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="tags" label="标签（逗号分隔）">
+            <Input placeholder="如: 规范, API文档" />
+          </Form.Item>
+          <Form.Item name="content" label="内容" rules={[{ required: true, message: '请输入内容' }]}>
+            <Input.TextArea rows={12} placeholder="支持 Markdown 格式" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="编辑企业知识"
+        open={editSourceModalOpen}
+        onOk={handleEditSource}
+        onCancel={() => { setEditSourceModalOpen(false); setEditingSource(null); editSourceForm.resetFields(); }}
+        width={600}
+        okText="保存"
+      >
+        <Form form={editSourceForm} layout="vertical">
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="tags" label="标签（逗号分隔）">
+            <Input placeholder="如: 规范, API文档" />
+          </Form.Item>
+          <Form.Item name="content" label="内容" rules={[{ required: true, message: '请输入内容' }]}>
+            <Input.TextArea rows={12} />
+          </Form.Item>
+          <Form.Item name="is_active" label="启用状态">
+            <Select options={[{ label: '启用', value: 1 }, { label: '停用', value: 0 }]} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Card>
+  );
+}
+
 const AdminPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1563,6 +1871,11 @@ const AdminPage = () => {
       icon: <ThunderboltOutlined />,
       label: '技能管理',
     },
+    {
+      key: 'enterprise-knowledge',
+      icon: <DatabaseOutlined />,
+      label: '企业知识库',
+    },
   ];
 
   const renderContent = () => {
@@ -1583,6 +1896,9 @@ const AdminPage = () => {
     }
     if (selectedKey === 'skills') {
       return <SkillManager visible={true} />;
+    }
+    if (selectedKey === 'enterprise-knowledge') {
+      return <EnterpriseKnowledgeManager />;
     }
     return null;
   };

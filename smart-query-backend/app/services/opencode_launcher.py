@@ -70,7 +70,8 @@ async def start_opencode(
     global _opencode_process
 
     if is_opencode_running():
-        return None
+        stop_opencode()
+        time.sleep(1)
 
     executable = _get_opencode_executable()
     env = os.environ.copy()

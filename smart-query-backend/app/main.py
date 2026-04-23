@@ -14,6 +14,7 @@ from app.services import opencode_launcher
 from app.services.scheduler import create_scheduler
 from app.api import auth, query, session, admin, files, internal
 from app.api import smart_entity, smart_entity_tasks
+from app.api import knowledge, admin_knowledge
 
 
 @asynccontextmanager
@@ -71,6 +72,8 @@ app.include_router(files.router)
 app.include_router(internal.router)
 app.include_router(smart_entity.router)
 app.include_router(smart_entity_tasks.router)
+app.include_router(knowledge.router)
+app.include_router(admin_knowledge.router)
 
 
 if __name__ == "__main__":
