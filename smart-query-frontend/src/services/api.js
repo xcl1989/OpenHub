@@ -864,3 +864,53 @@ export const adminKnowledgeService = {
     return response.data;
   },
 };
+
+export const learningService = {
+  getPatterns: async (status, page = 1, pageSize = 20) => {
+    const params = { page, page_size: pageSize };
+    if (status) params.status = status;
+    const response = await apiClient.get('/learned-patterns', { params });
+    return response.data;
+  },
+  updatePattern: async (patternId, status) => {
+    const response = await apiClient.put(`/learned-patterns/${patternId}`, { status });
+    return response.data;
+  },
+  getSkillUsage: async () => {
+    const response = await apiClient.get('/skill-usage');
+    return response.data;
+  },
+};
+
+export const channelService = {
+  listChannels: async (channelType) => {
+    const params = {};
+    if (channelType) params.channel_type = channelType;
+    const response = await apiClient.get('/channels', { params });
+    return response.data;
+  },
+  createChannel: async (data) => {
+    const response = await apiClient.post('/channels', data);
+    return response.data;
+  },
+  updateChannel: async (channelId, data) => {
+    const response = await apiClient.put(`/channels/${channelId}`, data);
+    return response.data;
+  },
+  deleteChannel: async (channelId) => {
+    const response = await apiClient.delete(`/channels/${channelId}`);
+    return response.data;
+  },
+  testChannel: async (channelId) => {
+    const response = await apiClient.post(`/channels/${channelId}/test`);
+    return response.data;
+  },
+  listBindings: async () => {
+    const response = await apiClient.get('/channels/bindings');
+    return response.data;
+  },
+  deleteBinding: async (bindingId) => {
+    const response = await apiClient.delete(`/channels/bindings/${bindingId}`);
+    return response.data;
+  },
+};

@@ -26,6 +26,10 @@
 
 **智能体协作** — 创建具有特定能力和协作配置的 AI 智能体，通过自然语言在智能体之间委派复杂任务。支持自动接受任务、跟踪执行状态、在任务中心查看格式化结果。支持智能体发现、任务生命周期管理（待处理 → 处理中 → 已完成）和基于角色的权限控制（委托人 / 被委托人 / 执行者）。
 
+**多渠道集成** — 将 AI 连接到聊天平台。当前支持飞书双向实时消息。每个渠道可独立配置默认模型。对话记录统一保存到 `conversation_messages` 表，与网页端共享历史。可扩展适配器架构，支持企业微信/钉钉接入。
+
+**自学习引擎** — AI 从用户交互中学习。当工具使用次数超过阈值时，系统通过 LLM 分析自动从成功模式中创建技能包。技能拥有完整生命周期：自动创建 → 30 天过期 → 90 天归档，支持管理员审核接受/拒绝。
+
 ---
 
 ## 系统架构
@@ -48,7 +52,7 @@
 
 核心设计：后端代理所有请求到同一个 opencode 实例，通过 `?directory={workspace_path}` 隔离用户。每个工作空间拥有独立的技能、工具、记忆文件和 git 历史。
 
-此外还支持：模型兜底链、定时任务（cron）、智能体协作、Agentic 知识库、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
+ 此外还支持：模型兜底链、定时任务（cron）、智能体协作、Agentic 知识库、多渠道集成、自学习引擎、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
 
 ---
 
@@ -255,20 +259,106 @@ cd ../smart-query-frontend && npm run dev                      # 前端
 
 ---
 
+## 多渠道集成
+
+```
+  飞书用户发送消息
+          ↓
+  飞书事件 → 后端回调 (/api/channels/{id}/callback)
+          ↓
+  Dispatcher 验证签名、解析消息
+          ↓
+  复用或创建 opencode 会话（按用户绑定）
+          ↓
+  发送 prompt 到 opencode → 流式接收 SSE 响应
+          ↓
+  每个 message_id 完成时 → 发送飞书消息
+          ↓
+  保存到 conversation_messages（与网页聊天统一）
+          + channel_messages（审计日志）
+```
+
+### 架构组件
+
+| 组件 | 职责 |
+|------|------|
+| `channels/base.py` | 抽象 `ChannelAdapter` + `ChannelMessage` 数据类 |
+| `channels/feishu.py` | 飞书适配器：Token 管理、签名验证、消息解析/发送 |
+| `channels/dispatcher.py` | 流式处理器：会话复用、按 message_id 分条投递、对话持久化 |
+| `api/channels.py` | REST API：渠道增删改、回调端点、连接测试 |
+
+### 功能特性
+
+- **渠道级模型配置**：每个渠道可独立设置默认模型（未配置则使用全局默认）
+- **会话复用**：同一飞书用户跨消息复用同一 opencode 会话
+- **消息持久化**：对话保存到 `conversation_messages` 表，使用 opencode session_id 关联
+- **可扩展**：适配器模式支持添加企业微信/钉钉渠道
+
+### 数据库表
+
+| 表 | 用途 |
+|----|------|
+| `channels` | 渠道配置（类型、名称、含模型/App 凭据的 JSON 配置） |
+| `channel_bindings` | 用户 ↔ 渠道绑定（external_user_id → opencode session_id） |
+| `channel_messages` | 入站/出站消息审计日志 |
+
+---
+
+## 自学习引擎
+
+```
+  用户与 AI 交互（工具调用发生）
+          ↓
+  stream.py 统计每轮工具使用次数
+          ↓
+  工具调用 ≥ 3 次？→ 触发分析
+          ↓
+  learner.py 将上下文发送给 LLM 分析
+          ↓
+  LLM 判断：创建技能包？更新已有技能？
+          ↓
+  在工作空间 .opencode/skills/ 中创建技能文件
+          ↓
+  记忆更新，记录新模式
+          ↓
+  前端弹出通知：用户可接受/拒绝
+```
+
+### 技能包生命周期
+
+| 阶段 | 时长 | 说明 |
+|------|------|------|
+| 活跃 | 0–30 天 | 新创建的技能包，正在使用 |
+| 过期 | 30 天 | 标记为待审核，未使用则自动删除 |
+| 归档 | 90 天 | 移至归档，不再激活 |
+
+### 配置项（system_config 表）
+
+| 键 | 说明 |
+|----|------|
+| `learning_enabled` | 启用/禁用自学习 |
+| `learning_model` | 用于模式分析的模型 |
+| `learning_provider` | 分析模型的提供商 |
+| `learning_api_key` | 分析模型的 API 密钥 |
+| `learning_api_base` | 分析模型的 API 基础 URL |
+
+---
+
 ## 项目结构
 
 ```
 OpenHub/
 ├── .opencode/
-│   ├── skills/                    # 24 个技能包（模板源）
+│   ├── skills/                    # 24+ 个技能包（模板源）
 │   └── tools/
 │       ├── memory.ts              # 跨会话记忆工具
 │       ├── knowledge.ts           # 知识库工具（search/list/info/save）
 │       └── scheduled-task.ts      # 定时任务工具
 ├── smart-query-backend/           # FastAPI 后端
 │   ├── app/
-│   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge
-│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler
+│   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge, channels
+│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler, learner, curator
+│   │   ├── services/channels/     # base, feishu, dispatcher（多渠道集成）
 │   │   ├── services/knowledge/    # parser, chunker, search (BM25+TF-IDF), injector
 │   │   └── core/                  # JWT 认证
 │   ├── enterprise-knowledge/      # 企业知识库存储目录
@@ -277,7 +367,7 @@ OpenHub/
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ...
+│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ChannelSettingsPage, ...
 │       └── services/api.js
 └── AGENTS.md
 ```

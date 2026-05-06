@@ -3,11 +3,14 @@
 FastAPI 后端服务 - OpenHub 平台
 """
 
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.services.opencode_client import opencode_client
 from app.services import opencode_launcher
@@ -15,6 +18,11 @@ from app.services.scheduler import create_scheduler
 from app.api import auth, query, session, admin, files, internal
 from app.api import smart_entity, smart_entity_tasks
 from app.api import knowledge, admin_knowledge
+from app.api import channels
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
+
+API_PREFIXES = ("/api/", "/docs", "/redoc", "/openapi.json")
 
 
 @asynccontextmanager
@@ -74,6 +82,19 @@ app.include_router(smart_entity.router)
 app.include_router(smart_entity_tasks.router)
 app.include_router(knowledge.router)
 app.include_router(admin_knowledge.router)
+app.include_router(channels.router)
+
+if STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="static_assets")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(request: Request, path: str):
+        if path.startswith(API_PREFIXES):
+            return FileResponse(STATIC_DIR / "index.html")
+        file_path = STATIC_DIR / path
+        if path and file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
 
 
 if __name__ == "__main__":

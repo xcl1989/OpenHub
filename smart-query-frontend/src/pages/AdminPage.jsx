@@ -16,10 +16,13 @@ import {
 import {
   Link, useNavigate, useLocation,
 } from 'react-router-dom';
-import { adminService, adminKnowledgeService } from '../services/api';
+import {
+  adminService, adminKnowledgeService
+} from '../services/api';
 import UsageStats from '../components/UsageStats';
 import ToolPermissionManager from '../components/ToolPermissionManager';
 import SkillManager from '../components/SkillManager';
+import ChannelSettingsPage from '../components/ChannelSettingsPage';
 
 const { Title, Text } = Typography;
 const { Sider, Content } = Layout;
@@ -1876,6 +1879,11 @@ const AdminPage = () => {
       icon: <DatabaseOutlined />,
       label: '企业知识库',
     },
+    {
+      key: 'channels',
+      icon: <ApiOutlined />,
+      label: '渠道管理',
+    },
   ];
 
   const renderContent = () => {
@@ -1899,6 +1907,9 @@ const AdminPage = () => {
     }
     if (selectedKey === 'enterprise-knowledge') {
       return <EnterpriseKnowledgeManager />;
+    }
+    if (selectedKey === 'channels') {
+      return <ChannelSettingsPage isAdmin={true} />;
     }
     return null;
   };

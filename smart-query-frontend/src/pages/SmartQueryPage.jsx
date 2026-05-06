@@ -66,6 +66,7 @@ import QuestionForm from '../components/QuestionForm';
 import QuestionFormInline from '../components/QuestionFormInline';
 import UserMessage from '../components/UserMessage';
 import AssistantMessage from '../components/AssistantMessage';
+import SkillLearningToast from '../components/SkillLearningToast';
 
 const { TextArea } = Input;
 const { Title, Text } = Typography;
@@ -1571,6 +1572,8 @@ const SmartQueryPage = () => {
   ];
 
   return (
+    <>
+    <SkillLearningToast />
     <div
       className="smart-query-container"
       style={{
@@ -2649,6 +2652,7 @@ const SmartQueryPage = () => {
         }
       `}</style>
     </div>
+    </>
   );
 };
 

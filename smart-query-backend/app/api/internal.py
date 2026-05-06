@@ -736,3 +736,52 @@ async def knowledge_save_internal(
         raise HTTPException(status_code=500, detail="保存知识失败")
 
     return {"ok": True, "source_id": source["id"], "title": source["title"]}
+
+
+class LearnedPatternCreateRequest(BaseModel):
+    directory: str
+    session_id: str = ""
+    turn_id: str = ""
+    trigger_description: str
+    learned_action: str
+    skill_name: str
+    confidence: float = 0.5
+    conversation_snapshot: dict | None = None
+
+
+@router.post("/learned-patterns")
+async def internal_create_learned_pattern(
+    body: LearnedPatternCreateRequest,
+    _: None = Depends(verify_internal_auth),
+):
+    user_id = _get_user_id_from_directory(body.directory)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="未找到用户")
+
+    pattern_id = database.create_learned_pattern(
+        user_id=user_id,
+        session_id=body.session_id,
+        turn_id=body.turn_id,
+        trigger_description=body.trigger_description,
+        learned_action=body.learned_action,
+        confidence=body.confidence,
+        skill_name=body.skill_name,
+        conversation_snapshot=body.conversation_snapshot,
+    )
+    if not pattern_id:
+        raise HTTPException(status_code=500, detail="创建学习记录失败")
+
+    return {"ok": True, "pattern_id": pattern_id}
+
+
+@router.get("/skill-telemetry")
+async def internal_get_skill_telemetry(
+    directory: str,
+    _: None = Depends(verify_internal_auth),
+):
+    user_id = _get_user_id_from_directory(directory)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="未找到用户")
+
+    telemetry = database.get_user_skill_telemetry(user_id)
+    return {"ok": True, "data": telemetry}

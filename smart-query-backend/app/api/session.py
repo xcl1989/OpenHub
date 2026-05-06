@@ -765,3 +765,59 @@ async def list_session_snapshots(
         database.get_git_snapshots, user_id, page_size, offset, session_id
     )
     return {"snapshots": snapshots, "total": len(snapshots)}
+
+
+@router.get("/api/learned-patterns")
+async def get_learned_patterns(
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    patterns = await asyncio.to_thread(
+        database.get_user_learned_patterns, user_id, status, page_size
+    )
+    return {"success": True, "data": patterns}
+
+
+@router.put("/api/learned-patterns/{pattern_id}")
+async def update_learned_pattern(
+    pattern_id: int,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    new_status = body.get("status")
+    if new_status not in ("accepted", "rejected", "auto_applied"):
+        raise HTTPException(status_code=400, detail="无效状态")
+
+    pattern = await asyncio.to_thread(database.get_learned_pattern_by_id, pattern_id)
+    if not pattern or pattern.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="学习记录不存在")
+
+    success = await asyncio.to_thread(
+        database.update_learned_pattern_status, pattern_id, new_status
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="更新失败")
+
+    return {"success": True}
+
+
+@router.get("/api/skill-usage")
+async def get_skill_usage(
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    telemetry = await asyncio.to_thread(database.get_user_skill_telemetry, user_id)
+    return {"success": True, "data": telemetry}

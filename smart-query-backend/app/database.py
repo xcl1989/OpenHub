@@ -833,6 +833,17 @@ def set_system_config(key: str, value: str) -> bool:
         return False
 
 
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取用户失败: {e}")
+        return None
+
+
 def get_user_workspace(user_id: int) -> Optional[str]:
     """
     获取用户工作空间路径（优先从 Redis 缓存读取）
@@ -2408,3 +2419,329 @@ def search_knowledge_sources(query: str, scope: Optional[str] = None, kb_id: Opt
     except Exception as e:
         print(f"搜索知识源失败：{e}")
         return []
+
+
+def create_learned_pattern(
+    user_id: int,
+    session_id: str,
+    turn_id: str,
+    trigger_description: str,
+    learned_action: str,
+    confidence: float,
+    skill_name: str,
+    conversation_snapshot: dict | None = None,
+) -> int | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO learned_patterns
+                    (user_id, session_id, turn_id, trigger_description, learned_action,
+                     confidence, skill_name, conversation_snapshot)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        user_id, session_id, turn_id, trigger_description,
+                        learned_action, confidence, skill_name,
+                        json.dumps(conversation_snapshot, ensure_ascii=False) if conversation_snapshot else None,
+                    ),
+                )
+                return cursor.lastrowid
+    except Exception as e:
+        print(f"创建学习模式失败: {e}")
+        return None
+
+
+def get_user_learned_patterns(user_id: int, status: str | None = None, limit: int = 50) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                if status:
+                    cursor.execute(
+                        "SELECT * FROM learned_patterns WHERE user_id = %s AND status = %s ORDER BY created_at DESC LIMIT %s",
+                        (user_id, status, limit),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT * FROM learned_patterns WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                        (user_id, limit),
+                    )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取学习模式失败: {e}")
+        return []
+
+
+def update_learned_pattern_status(pattern_id: int, status: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE learned_patterns SET status = %s, reviewed_at = NOW() WHERE id = %s",
+                    (status, pattern_id),
+                )
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新学习模式状态失败: {e}")
+        return False
+
+
+def get_learned_pattern_by_id(pattern_id: int) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM learned_patterns WHERE id = %s", (pattern_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取学习模式失败: {e}")
+        return None
+
+
+def upsert_skill_usage(user_id: int, skill_name: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO skill_usage_telemetry (user_id, skill_name, use_count, last_used_at)
+                    VALUES (%s, %s, 1, NOW())
+                    ON DUPLICATE KEY UPDATE
+                        use_count = use_count + 1,
+                        last_used_at = NOW()""",
+                    (user_id, skill_name),
+                )
+                return True
+    except Exception as e:
+        print(f"更新技能使用遥测失败: {e}")
+        return False
+
+
+def get_user_skill_telemetry(user_id: int) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM skill_usage_telemetry WHERE user_id = %s ORDER BY last_used_at DESC",
+                    (user_id,),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取技能遥测失败: {e}")
+        return []
+
+
+def update_skill_usage_state(user_id: int, skill_name: str, state: str) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE skill_usage_telemetry SET state = %s WHERE user_id = %s AND skill_name = %s",
+                    (state, user_id, skill_name),
+                )
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新技能状态失败: {e}")
+        return False
+
+
+def get_all_users() -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id, username, workspace_path FROM users WHERE disabled = 0")
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户列表失败: {e}")
+        return []
+
+
+def get_provider_auth(provider_id: str) -> dict | None:
+    try:
+        auth_raw = get_system_config(f"provider_auth_{provider_id}")
+        if auth_raw:
+            return json.loads(auth_raw)
+    except Exception:
+        pass
+    return None
+
+
+def create_channel(channel_type: str, name: str, config_json: dict, owner_id: int) -> int | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO channels (channel_type, name, config, owner_id)
+                    VALUES (%s, %s, %s, %s)""",
+                    (channel_type, name, json.dumps(config_json, ensure_ascii=False), owner_id),
+                )
+                return cursor.lastrowid
+    except Exception as e:
+        print(f"创建渠道失败: {e}")
+        return None
+
+
+def get_channels(owner_id: int | None = None, channel_type: str | None = None) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                conditions = []
+                params = []
+                if owner_id:
+                    conditions.append("owner_id = %s")
+                    params.append(owner_id)
+                if channel_type:
+                    conditions.append("channel_type = %s")
+                    params.append(channel_type)
+                where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+                cursor.execute(f"SELECT * FROM channels{where} ORDER BY created_at DESC", params)
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取渠道列表失败: {e}")
+        return []
+
+
+def get_channel_by_id(channel_id: int) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM channels WHERE id = %s", (channel_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取渠道失败: {e}")
+        return None
+
+
+def update_channel(channel_id: int, **fields) -> bool:
+    try:
+        allowed = {"name", "config", "status"}
+        set_parts = []
+        values = []
+        for k, v in fields.items():
+            if k in allowed:
+                if k == "config" and isinstance(v, dict):
+                    v = json.dumps(v, ensure_ascii=False)
+                set_parts.append(f"{k} = %s")
+                values.append(v)
+        if not set_parts:
+            return False
+        values.append(channel_id)
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE channels SET {', '.join(set_parts)} WHERE id = %s", values
+                )
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新渠道失败: {e}")
+        return False
+
+
+def delete_channel(channel_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM channels WHERE id = %s", (channel_id,))
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除渠道失败: {e}")
+        return False
+
+
+def get_or_create_channel_binding(
+    channel_id: int, user_id: int, external_user_id: str, external_chat_id: str | None = None
+) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM channel_bindings WHERE channel_id = %s AND external_user_id = %s",
+                    (channel_id, external_user_id),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    if external_chat_id and existing.get("external_chat_id") != external_chat_id:
+                        cursor.execute(
+                            "UPDATE channel_bindings SET external_chat_id = %s, last_active_at = NOW() WHERE id = %s",
+                            (external_chat_id, existing["id"]),
+                        )
+                    else:
+                        cursor.execute(
+                            "UPDATE channel_bindings SET last_active_at = NOW() WHERE id = %s",
+                            (existing["id"],),
+                        )
+                    cursor.execute(
+                        "SELECT * FROM channel_bindings WHERE id = %s", (existing["id"],)
+                    )
+                    return cursor.fetchone()
+
+                cursor.execute(
+                    """INSERT INTO channel_bindings (channel_id, user_id, external_user_id, external_chat_id)
+                    VALUES (%s, %s, %s, %s)""",
+                    (channel_id, user_id, external_user_id, external_chat_id),
+                )
+                cursor.execute(
+                    "SELECT * FROM channel_bindings WHERE id = %s", (cursor.lastrowid,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取/创建渠道绑定失败: {e}")
+        return None
+
+
+def update_channel_binding_session(binding_id: int, session_id: str | None) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE channel_bindings SET session_id = %s WHERE id = %s",
+                    (session_id, binding_id),
+                )
+                return True
+    except Exception as e:
+        print(f"更新渠道绑定会话失败: {e}")
+        return False
+
+
+def get_channel_bindings(user_id: int | None = None) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                if user_id:
+                    cursor.execute(
+                        "SELECT * FROM channel_bindings WHERE user_id = %s ORDER BY last_active_at DESC",
+                        (user_id,),
+                    )
+                else:
+                    cursor.execute("SELECT * FROM channel_bindings ORDER BY last_active_at DESC")
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取渠道绑定失败: {e}")
+        return []
+
+
+def delete_channel_binding(binding_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM channel_bindings WHERE id = %s", (binding_id,))
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除渠道绑定失败: {e}")
+        return False
+
+
+def log_channel_message(
+    channel_id: int, binding_id: int, direction: str, content: str,
+    content_type: str = "text", external_msg_id: str | None = None, status: str = "sent"
+) -> int | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO channel_messages
+                    (channel_id, binding_id, direction, content, content_type, external_msg_id, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (channel_id, binding_id, direction, content, content_type, external_msg_id, status),
+                )
+                return cursor.lastrowid
+    except Exception as e:
+        print(f"记录渠道消息失败: {e}")
+        return None

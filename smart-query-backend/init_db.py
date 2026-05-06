@@ -392,6 +392,92 @@ TABLES = {
             FULLTEXT INDEX ft_title_content (title, content)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "learned_patterns": """
+        CREATE TABLE IF NOT EXISTS learned_patterns (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            session_id VARCHAR(128),
+            turn_id VARCHAR(64),
+            trigger_description TEXT,
+            learned_action TEXT,
+            confidence FLOAT DEFAULT 0.0,
+            status ENUM('pending', 'accepted', 'rejected', 'auto_applied') DEFAULT 'pending',
+            skill_name VARCHAR(64),
+            conversation_snapshot JSON,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at DATETIME DEFAULT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_user_status (user_id, status),
+            INDEX idx_skill_name (skill_name),
+            INDEX idx_created_at (created_at DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "skill_usage_telemetry": """
+        CREATE TABLE IF NOT EXISTS skill_usage_telemetry (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            skill_name VARCHAR(64) NOT NULL,
+            use_count INT DEFAULT 0,
+            view_count INT DEFAULT 0,
+            patch_count INT DEFAULT 0,
+            last_used_at DATETIME DEFAULT NULL,
+            state ENUM('active', 'stale', 'archived') DEFAULT 'active',
+            pinned TINYINT DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE KEY idx_user_skill (user_id, skill_name),
+            INDEX idx_state (state)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "channels": """
+        CREATE TABLE IF NOT EXISTS channels (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            channel_type VARCHAR(32) NOT NULL,
+            name VARCHAR(128) NOT NULL,
+            config JSON NOT NULL,
+            owner_id INT NOT NULL,
+            status ENUM('active', 'inactive') DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_type (channel_type),
+            INDEX idx_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "channel_bindings": """
+        CREATE TABLE IF NOT EXISTS channel_bindings (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            channel_id INT NOT NULL,
+            user_id INT NOT NULL,
+            external_user_id VARCHAR(128) NOT NULL,
+            external_chat_id VARCHAR(128) DEFAULT NULL,
+            session_id VARCHAR(128) DEFAULT NULL,
+            last_active_at DATETIME DEFAULT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE KEY idx_channel_external (channel_id, external_user_id),
+            INDEX idx_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "channel_messages": """
+        CREATE TABLE IF NOT EXISTS channel_messages (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            channel_id INT NOT NULL,
+            binding_id BIGINT NOT NULL,
+            direction ENUM('inbound', 'outbound') NOT NULL,
+            content TEXT,
+            content_type VARCHAR(32) DEFAULT 'text',
+            external_msg_id VARCHAR(128) DEFAULT NULL,
+            status ENUM('sent', 'delivered', 'failed') DEFAULT 'sent',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+            INDEX idx_binding (binding_id),
+            INDEX idx_direction (direction),
+            INDEX idx_created (created_at DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 

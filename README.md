@@ -26,6 +26,10 @@
 
 **Smart Entity Collaboration** — Create AI agents (smart entities) with specific capabilities and collaboration configs. Delegate complex tasks between entities via natural language. Auto-accept tasks, track execution status, and view formatted results in the Task Center. Supports entity discovery, task lifecycle management (pending → processing → completed), and role-based permissions (delegator / delegatee / executor).
 
+**Multi-Channel Integration** — Connect AI to chat platforms. Currently supports Feishu (飞书) with bidirectional real-time messaging. Each channel can configure its own default model. Conversations are recorded to the same `conversation_messages` table as web chats, providing a unified history view. Extensible adapter architecture for WeCom/ DingTalk.
+
+**Self-Learning Engine** — The AI learns from user interactions. When tool usage exceeds a threshold, the system uses LLM analysis to auto-create skills from successful patterns. Skills have a full lifecycle: auto-creation → 30-day expiry → 90-day archive, with admin review for acceptance/rejection.
+
 ---
 
 ## Architecture
@@ -48,7 +52,7 @@
 
 Key design: backend proxies all requests through one opencode instance, using `?directory={workspace_path}` to isolate users. Each workspace has its own skills, tools, memory files, and git history.
 
-Plus: model failover chains, scheduled tasks (cron), smart entity collaboration, agentic knowledge base, SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
+ Plus: model failover chains, scheduled tasks (cron), smart entity collaboration, agentic knowledge base, multi-channel integration, self-learning engine, SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
 
 ---
 
@@ -255,20 +259,106 @@ Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, [opencode](https://opencod
 
 ---
 
+## Multi-Channel Integration
+
+```
+  Feishu user sends message
+          ↓
+  Feishu event → Backend callback (/api/channels/{id}/callback)
+          ↓
+  Dispatcher verifies signature, parses message
+          ↓
+  Reuses or creates opencode session (per user binding)
+          ↓
+  Sends prompt to opencode → streams SSE response
+          ↓
+  On each message_id completion → sends Feishu message
+          ↓
+  Saves to conversation_messages (same as web chat)
+          + channel_messages (audit log)
+```
+
+### Architecture
+
+| Component | Role |
+|-----------|------|
+| `channels/base.py` | Abstract `ChannelAdapter` + `ChannelMessage` dataclass |
+| `channels/feishu.py` | Feishu adapter: token management, signature verification, message parse/send |
+| `channels/dispatcher.py` | Stream processor: session reuse, per-message-id delivery, conversation persistence |
+| `api/channels.py` | REST API: channel CRUD, callback endpoint, connection test |
+
+### Features
+
+- **Per-channel model**: Each channel can configure a default model (falls back to global default)
+- **Session reuse**: Same Feishu user reuses the same opencode session across messages
+- **Message persistence**: Conversations saved to `conversation_messages` with the opencode session_id
+- **Extensible**: Adapter pattern supports adding WeCom/DingTalk channels
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `channels` | Channel config (type, name, JSON config with model/app credentials) |
+| `channel_bindings` | User ↔ channel binding (external_user_id → opencode session_id) |
+| `channel_messages` | Audit log of all inbound/outbound messages |
+
+---
+
+## Self-Learning Engine
+
+```
+  User interacts with AI (tool calls happen)
+          ↓
+  stream.py counts tool usage per turn
+          ↓
+  Tool calls ≥ 3? → trigger analysis
+          ↓
+  learner.py sends context to LLM for analysis
+          ↓
+  LLM decides: create skill? update existing?
+          ↓
+  Skill file created in workspace .opencode/skills/
+          ↓
+  Memory updated with new pattern
+          ↓
+  Frontend toast: user can accept/reject
+```
+
+### Skill Lifecycle
+
+| Phase | Duration | Description |
+|-------|----------|-------------|
+| Active | 0–30 days | Newly created skill, actively used |
+| Expiring | 30 days | Marked for review, auto-deleted if unused |
+| Archived | 90 days | Moved to archive, no longer active |
+
+### Configuration (system_config table)
+
+| Key | Description |
+|-----|-------------|
+| `learning_enabled` | Enable/disable self-learning |
+| `learning_model` | Model used for pattern analysis |
+| `learning_provider` | Provider for the analysis model |
+| `learning_api_key` | API key for the analysis model |
+| `learning_api_base` | API base URL for the analysis model |
+
+---
+
 ## Project Structure
 
 ```
 OpenHub/
 ├── .opencode/
-│   ├── skills/                    # 24 skill packages (template source)
+│   ├── skills/                    # 24+ skill packages (template source)
 │   └── tools/
 │       ├── memory.ts              # Cross-session memory tool
 │       ├── knowledge.ts           # Knowledge base tools (search/list/info/save)
 │       └── scheduled-task.ts      # Scheduled task tool
 ├── smart-query-backend/           # FastAPI backend
 │   ├── app/
-│   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge
-│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler
+│   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge, channels
+│   │   ├── services/              # stream, memory, git_snapshot, failover, scheduler, learner, curator
+│   │   ├── services/channels/     # base, feishu, dispatcher (multi-channel integration)
 │   │   ├── services/knowledge/    # parser, chunker, search (BM25+TF-IDF), injector
 │   │   └── core/                  # JWT auth
 │   ├── enterprise-knowledge/      # Enterprise knowledge base storage
@@ -277,7 +367,7 @@ OpenHub/
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ...
+│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ChannelSettingsPage, ...
 │       └── services/api.js
 └── AGENTS.md
 ```

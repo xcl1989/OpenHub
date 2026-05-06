@@ -40,16 +40,6 @@ def _cleanup_old_logs(log_dir: Path, max_age_days: int = 7):
             f.unlink(missing_ok=True)
 
 
-@router.get("/")
-async def root():
-    """API 根路径"""
-    return {
-        "message": "Opencode Agent 平台 API 服务",
-        "version": "1.0.0",
-        "docs": "/docs",
-    }
-
-
 @router.get("/api/models")
 async def get_models(current_user: dict = Depends(get_current_user)):
     """获取当前用户可用的模型列表"""

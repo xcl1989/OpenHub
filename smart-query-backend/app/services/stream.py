@@ -16,6 +16,9 @@ from app.services import memory
 from app.services import git_snapshot as git_snap
 from app.services.knowledge import build_knowledge_context
 from app.models.query import ImageData
+from app.services.learner import should_trigger as learning_should_trigger
+from app.services.learner import analyze_and_learn
+from app.services.learner import update_memory_from_session
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +461,14 @@ async def _background_collector(
                                 turn_id=turn_id,
                             )
 
+                            if user_id and message_tools.get(last_message_id):
+                                for tkey, tinfo in message_tools.get(last_message_id, {}).items():
+                                    skill_name = _extract_skill_from_tool_name(tinfo.get("tool", ""))
+                                    if skill_name:
+                                        await asyncio.to_thread(
+                                            database.upsert_skill_usage, user_id, skill_name
+                                        )
+
                         message_count += 1
                         last_message_id = message_id
                         pushed_parts = set()
@@ -592,6 +603,30 @@ async def _background_collector(
                     f"[WARN] Git snapshot skipped: {snap_err}\n",
                 )
 
+            try:
+                if user_id and workspace_path and message_tools:
+                    all_tools = {}
+                    for mid, tools in message_tools.items():
+                        all_tools.update(tools)
+                    if all_tools and learning_should_trigger(all_tools, message_contents):
+                        await asyncio.to_thread(
+                            _write_log, log_file,
+                            "[INFO] Learning trigger activated, analyzing...\n",
+                        )
+                        snapshot_contents = dict(message_contents)
+                        snapshot_tools = {mid: dict(tools) for mid, tools in message_tools.items()}
+                        asyncio.create_task(
+                            _safe_analyze_and_learn(
+                                user_id, session_id, turn_id or "", question,
+                                snapshot_contents, snapshot_tools, workspace_path, log_file,
+                            )
+                        )
+            except Exception as learn_err:
+                await asyncio.to_thread(
+                    _write_log, log_file,
+                    f"[WARN] Learning analysis skipped: {learn_err}\n",
+                )
+
             await queue.put(
                 f"data: {json.dumps({'type': 'session_idle', 'done': False})}\n\n"
             )
@@ -701,6 +736,74 @@ async def _save_message_to_db(
         del message_tools[message_id]
     if message_id in message_reasoning:
         del message_reasoning[message_id]
+
+
+async def _push_event_to_queue(
+    queue: asyncio.Queue,
+    event_type: str,
+    properties: dict,
+    log_file: Path,
+):
+    if event_type == "message.part.updated":
+        part = properties.get("part", {})
+        part_type = part.get("type", "")
+        text = part.get("text", "")
+
+        if part_type == "step-start":
+            msg = {"type": "step-start", "done": False}
+            await asyncio.to_thread(_write_log, log_file, f"[SEND] -> queue: {msg}\n")
+            await queue.put(f"data: {json.dumps(msg)}\n\n")
+
+        elif part_type == "reasoning" and text:
+            for i in range(0, max(len(text), 1), 10):
+                chunk = text[i : i + 10]
+                msg = {
+                    "type": "reasoning",
+                    "content": chunk,
+                    "done": False,
+                }
+        await queue.put(f"data: {json.dumps(msg)}\n\n")
+
+
+def _extract_skill_from_tool_name(tool_name: str) -> str | None:
+    if not tool_name:
+        return None
+    if tool_name.startswith("skill_"):
+        return None
+    if tool_name in (
+        "knowledge_knowledge_search",
+        "knowledge_knowledge_save",
+        "memory_memory_save",
+        "memory_memory_recall",
+        "question",
+    ):
+        return None
+    return tool_name
+
+
+async def _safe_analyze_and_learn(
+    user_id, session_id, turn_id, question, contents, tools, workspace_path, log_file
+):
+    try:
+        await analyze_and_learn(
+            user_id=user_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            question=question,
+            message_contents=contents,
+            message_tools=tools,
+            workspace_path=workspace_path,
+        )
+        update_memory_from_session(workspace_path, contents, tools)
+        await asyncio.to_thread(
+            _write_log, log_file,
+            "[INFO] Learning analysis completed\n",
+        )
+    except Exception as e:
+        await asyncio.to_thread(
+            _write_log, log_file,
+            f"[WARN] Learning analysis error: {e}\n",
+        )
 
 
 async def _push_event_to_queue(
