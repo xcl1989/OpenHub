@@ -65,6 +65,38 @@ async def handle_inbound(
     if not channel:
         return None
 
+    content = channel_msg.content.strip()
+
+    if content.isdigit() and len(content) == 6:
+        from app.api.channels import verify_bind_code
+        bound_user_id = verify_bind_code(content)
+        if bound_user_id:
+            binding = database.get_channel_binding_by_external(
+                channel_id, channel_msg.external_user_id
+            )
+            if binding:
+                database.update_channel_binding_user(binding["id"], bound_user_id)
+            else:
+                database.get_or_create_channel_binding(
+                    channel_id=channel_id,
+                    user_id=bound_user_id,
+                    external_user_id=channel_msg.external_user_id,
+                    external_chat_id=channel_msg.external_chat_id,
+                )
+            bound_user = database.get_user_by_id(bound_user_id)
+            username = bound_user["username"] if bound_user else "未知用户"
+            await adapter.send_message(
+                channel_msg.external_chat_id,
+                f"绑定成功！已关联到系统用户「{username}」",
+            )
+            return {"status": "ok"}
+        else:
+            await adapter.send_message(
+                channel_msg.external_chat_id,
+                "绑定码无效或已过期，请在网页端重新获取。",
+            )
+            return {"status": "ok"}
+
     binding = database.get_or_create_channel_binding(
         channel_id=channel_id,
         user_id=channel["owner_id"],
@@ -85,9 +117,9 @@ async def handle_inbound(
     )
 
     workspace_path = None
-    owner = database.get_user_by_id(channel["owner_id"])
-    if owner:
-        workspace_path = owner.get("workspace_path")
+    bound_user = database.get_user_by_id(binding["user_id"])
+    if bound_user:
+        workspace_path = bound_user.get("workspace_path")
 
     asyncio.create_task(
         _process_channel_query(
@@ -98,7 +130,7 @@ async def handle_inbound(
             workspace_path=workspace_path,
             chat_id=channel_msg.external_chat_id,
             channel_config=channel.get("config", {}),
-            owner_id=channel.get("owner_id"),
+            owner_id=binding["user_id"],
         )
     )
 

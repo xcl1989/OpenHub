@@ -35,7 +35,7 @@
 ## Architecture
 
 ```
- Frontend (:3000)  ──▶  Backend (:8000)  ──▶  opencode serve (:4096)
+ Frontend + API (:8000)  ──▶  Backend (:8000)  ──▶  opencode serve (:4096)
                                                ┌──── ?directory= ────┐
                                                │                      │
                                       workspace/admin/       workspace/alice/
@@ -223,23 +223,25 @@ Knowledge is wrapped in `<context>` XML tags, separate from the user's actual qu
 # 1. Clone and configure
 git clone <repo-url> && cd OpenHub
 cp smart-query-backend/.env.example smart-query-backend/.env   # MySQL creds, JWT secret
-cp smart-query-frontend/.env.example smart-query-frontend/.env
 
 # 2. Install dependencies
 cd smart-query-backend && pip install -r requirements.txt
 cd ../smart-query-frontend && npm install
 
-# 3. Initialize database
+# 3. Build frontend
+npm run build
+cp -r dist ../smart-query-backend/static
+
+# 4. Initialize database
 cd ../smart-query-backend && python init_db.py
 
-# 4. Start
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # Backend (auto-starts opencode)
-cd ../smart-query-frontend && npm run dev                      # Frontend
+# 5. Start (single port, backend serves frontend)
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Access: **Frontend** http://localhost:3000 · **API Docs** http://localhost:8000/docs
+Access: **http://localhost:8000** (Frontend + API) · **API Docs** http://localhost:8000/docs
 
-Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, [opencode](https://opencode.ai) 1.4+
+Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, Redis, [opencode](https://opencode.ai) 1.4+
 
 ---
 
@@ -397,13 +399,18 @@ INTERNAL_API_SECRET=***    # Required for memory & task tools
 # Backend (auto-reload)
 cd smart-query-backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Frontend
-cd smart-query-frontend && npm run dev      # Dev server
-npm run build                               # Production build
+# Frontend dev (hot-reload, proxied to backend)
+cd smart-query-frontend && npm run dev      # Dev server on :3000
+
+# Build & deploy frontend to backend static
+cd smart-query-frontend && npm run build && cp -r dist ../smart-query-backend/static
 
 # Database migration
 python init_db.py
 ```
+
+> **Production**: Backend serves the built frontend from `smart-query-backend/static/` on port 8000. No separate frontend server needed.
+> **Development**: Run `npm run dev` for hot-reload frontend on port 3000, proxied to backend on 8000.
 
 ---
 

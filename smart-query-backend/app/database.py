@@ -2700,6 +2700,34 @@ def update_channel_binding_session(binding_id: int, session_id: str | None) -> b
         return False
 
 
+def update_channel_binding_user(binding_id: int, user_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE channel_bindings SET user_id = %s WHERE id = %s",
+                    (user_id, binding_id),
+                )
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新渠道绑定用户失败: {e}")
+        return False
+
+
+def get_channel_binding_by_external(channel_id: int, external_user_id: str) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM channel_bindings WHERE channel_id = %s AND external_user_id = %s",
+                    (channel_id, external_user_id),
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"查询渠道绑定失败: {e}")
+        return None
+
+
 def get_channel_bindings(user_id: int | None = None) -> list[dict]:
     try:
         with get_db_connection() as conn:

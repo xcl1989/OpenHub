@@ -35,7 +35,7 @@
 ## 系统架构
 
 ```
- 前端 (:3000)  ──▶  后端 (:8000)  ──▶  opencode serve (:4096)
+ 前端 + API (:8000)  ──▶  后端 (:8000)  ──▶  opencode serve (:4096)
                                              ┌──── ?directory= ────┐
                                              │                      │
                                     workspace/admin/       workspace/alice/
@@ -223,23 +223,25 @@
 # 1. 克隆并配置
 git clone <repo-url> && cd OpenHub
 cp smart-query-backend/.env.example smart-query-backend/.env   # 填入 MySQL 凭据、JWT 密钥
-cp smart-query-frontend/.env.example smart-query-frontend/.env
 
 # 2. 安装依赖
 cd smart-query-backend && pip install -r requirements.txt
 cd ../smart-query-frontend && npm install
 
-# 3. 初始化数据库
+# 3. 构建前端
+npm run build
+cp -r dist ../smart-query-backend/static
+
+# 4. 初始化数据库
 cd ../smart-query-backend && python init_db.py
 
-# 4. 启动
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # 后端（自动启动 opencode）
-cd ../smart-query-frontend && npm run dev                      # 前端
+# 5. 启动（单端口，后端直接提供前端页面）
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-访问：**前端** http://localhost:3000 · **API 文档** http://localhost:8000/docs
+访问：**http://localhost:8000**（前端 + API）· **API 文档** http://localhost:8000/docs
 
-前置要求：Python 3.10+、Node.js 18+、MySQL 5.7+、[opencode](https://opencode.ai) 1.4+
+前置要求：Python 3.10+、Node.js 18+、MySQL 5.7+、Redis、[opencode](https://opencode.ai) 1.4+
 
 ---
 
@@ -397,13 +399,18 @@ INTERNAL_API_SECRET=***    # 记忆和任务工具必需
 # 后端（自动重载）
 cd smart-query-backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# 前端
-cd smart-query-frontend && npm run dev      # 开发服务器
-npm run build                               # 生产构建
+# 前端开发（热重载，代理到后端）
+cd smart-query-frontend && npm run dev      # 开发服务器 :3000
+
+# 构建并部署前端到后端静态目录
+cd smart-query-frontend && npm run build && cp -r dist ../smart-query-backend/static
 
 # 数据库迁移
 python init_db.py
 ```
+
+> **生产模式**：后端从 `smart-query-backend/static/` 提供前端构建产物，统一在 8000 端口访问，无需单独的前端服务器。
+> **开发模式**：运行 `npm run dev` 启动热重载前端（端口 3000），API 请求代理到后端 8000 端口。
 
 ---
 

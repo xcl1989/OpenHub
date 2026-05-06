@@ -913,4 +913,22 @@ export const channelService = {
     const response = await apiClient.delete(`/channels/bindings/${bindingId}`);
     return response.data;
   },
+  adminCreateBinding: async (channelId, externalUserId, userId) => {
+    const response = await apiClient.post(`/channels/${channelId}/bindings`, {
+      external_user_id: externalUserId,
+      user_id: userId,
+    });
+    return response.data;
+  },
+  adminUpdateBinding: async (bindingId, externalUserId, userId) => {
+    const response = await apiClient.put(`/channels/bindings/${bindingId}`, {
+      external_user_id: externalUserId,
+      user_id: userId,
+    });
+    return response.data;
+  },
+  generateBindCode: async () => {
+    const response = await apiClient.post('/channels/bind-code');
+    return response.data;
+  },
 };
