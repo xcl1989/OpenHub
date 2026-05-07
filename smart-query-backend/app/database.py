@@ -2705,7 +2705,7 @@ def update_channel_binding_user(binding_id: int, user_id: int) -> bool:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE channel_bindings SET user_id = %s WHERE id = %s",
+                    "UPDATE channel_bindings SET user_id = %s, session_id = NULL WHERE id = %s",
                     (user_id, binding_id),
                 )
                 return cursor.rowcount > 0

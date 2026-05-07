@@ -218,9 +218,14 @@ async def _process_channel_query(
 
         current_message_id = ""
         current_message_text = ""
+        part_types: dict[str, str] = {}
+        notified_tools: dict[str, str] = {}
         all_responses: list[str] = []
         start_time = time.time()
-        timeout = 120.0
+        last_activity_time = start_time
+        wait_count = 0
+        max_wait_count = 6
+        wait_interval = 60.0
 
         stream_client = await opencode_client.get_client_for_stream()
         async with stream_client.stream(
@@ -228,18 +233,30 @@ async def _process_channel_query(
             f"{config.OPENCODE_BASE_URL}/global/event",
             params={"directory": workspace_path} if workspace_path else None,
             auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
-            timeout=timeout,
+            timeout=max_wait_count * wait_interval + 60,
         ) as event_response:
+            total_events = 0
+            matched_events = 0
             async for line in event_response.aiter_lines():
-                if time.time() - start_time > timeout:
-                    break
+                now = time.time()
+                if now - last_activity_time >= wait_interval:
+                    wait_count += 1
+                    last_activity_time = now
+                    if wait_count > max_wait_count:
+                        print(f"[ChannelDispatcher] timeout: {wait_count} waits, no activity for {max_wait_count * wait_interval}s", flush=True)
+                        break
+                    print(f"[ChannelDispatcher] waiting: {wait_count}/{max_wait_count}", flush=True)
+                    await _safe_send(adapter, chat_id, "请等待，正在执行中...")
+
                 if not line.startswith("data: "):
                     continue
                 try:
                     data = json.loads(line[6:])
                     payload = data.get("payload", {})
                     event_type = payload.get("type", "")
-                    properties = payload.get("properties", {})
+                    properties = data.get("payload", {}).get("properties", {})
+
+                    total_events += 1
 
                     event_session = (
                         properties.get("sessionID", "")
@@ -249,25 +266,77 @@ async def _process_channel_query(
                     if event_session != oc_session_id:
                         continue
 
+                    matched_events += 1
+                    last_activity_time = time.time()
+                    wait_count = 0
+
                     if event_type == "message.updated":
                         info = properties.get("info", {})
                         msg_id = info.get("id", "")
                         role = info.get("role", "")
                         if role == "assistant" and msg_id != current_message_id:
-                            if current_message_id and current_message_text.strip():
+                            if current_message_text.strip():
                                 all_responses.append(current_message_text.strip())
                                 await _safe_send(adapter, chat_id, current_message_text.strip())
                             current_message_id = msg_id
                             current_message_text = ""
+                            part_types = {}
+                            notified_tools = {}
+                            print(f"[ChannelDispatcher] new msg: {msg_id}", flush=True)
+
+                    elif event_type == "message.part.updated":
+                        part = properties.get("part", {})
+                        part_type = part.get("type", "")
+                        part_id = part.get("id", "")
+                        if part_id:
+                            part_types[part_id] = part_type
+                        print(f"[ChannelDispatcher] part_updated: id={part_id} type={part_type} has_end={bool(part.get('time', {}).get('end'))}", flush=True)
+                        if part_type == "text" and part.get("time", {}).get("end"):
+                            if current_message_text.strip():
+                                all_responses.append(current_message_text.strip())
+                                await _safe_send(adapter, chat_id, current_message_text.strip())
+                                current_message_text = ""
+                        elif part_type == "tool":
+                            tool_name = part.get("tool", "")
+                            tool_state = part.get("state", {})
+                            tool_status = tool_state.get("status", "")
+                            tool_key = part.get("id", "")
+                            tool_metadata = tool_state.get("metadata", {})
+                            meta_title = tool_metadata.get("title", "")
+                            meta_desc = tool_metadata.get("description", "")
+                            meta_name = tool_metadata.get("name", "")
+                            tool_input = tool_state.get("input", {})
+                            print(f"[ChannelDispatcher] tool: name={tool_name} status={tool_status} meta_title={meta_title!r} meta_desc={meta_desc!r} meta_name={meta_name!r} input_keys={list(tool_input.keys())}", flush=True)
+                            if tool_status == "running":
+                                detail = meta_title or meta_desc
+                                if detail:
+                                    hint = detail
+                                elif meta_name:
+                                    hint = _skill_display_name(meta_name)
+                                elif tool_name and tool_name.lower() == "task":
+                                    task_desc = tool_input.get("description", "")
+                                    task_prompt = tool_input.get("prompt", "")
+                                    hint = task_desc or (task_prompt[:30].replace("\n", " ") if task_prompt else "") or "处理子任务"
+                                else:
+                                    hint = _tool_display_name(tool_name)
+                                prev = notified_tools.get(tool_key, "")
+                                if hint != prev:
+                                    notified_tools[tool_key] = hint
+                                    await _safe_send(adapter, chat_id, f"正在{hint}...")
 
                     elif event_type == "message.part.delta":
                         delta = properties.get("delta", "")
-                        if delta:
+                        part_id = properties.get("partID", "")
+                        pt = part_types.get(part_id, "")
+                        if delta and pt == "text":
                             current_message_text += delta
+                        if delta and matched_events <= 30:
+                            print(f"[ChannelDispatcher] delta: partID={part_id} type={pt!r} len={len(delta)} text_len={len(current_message_text)}", flush=True)
 
                     elif event_type == "session.status":
                         status = properties.get("status", {})
                         if status.get("type") == "idle":
+                            print(f"[ChannelDispatcher] session idle", flush=True)
                             break
                 except json.JSONDecodeError:
                     continue
@@ -279,7 +348,8 @@ async def _process_channel_query(
         full_response = "\n".join(all_responses)
 
         if not full_response:
-            await adapter.send_message(chat_id, "(AI 未返回有效内容)")
+            print(f"[ChannelDispatcher] 警告: total_events={total_events} matched_events={matched_events}", flush=True)
+            await adapter.send_message(chat_id, "AI 未返回有效内容，请稍后再试")
 
         print(f"[ChannelDispatcher] 完成: {len(full_response)} chars, {len(all_responses)} messages", flush=True)
 
@@ -315,6 +385,52 @@ async def _safe_send(adapter, chat_id, text):
         await adapter.send_message(chat_id, text)
     except Exception as e:
         print(f"[ChannelDispatcher] _safe_send error: {e}", flush=True)
+
+
+_TOOL_DISPLAY_NAMES = {
+    "MiniMax_web_search": "搜索网页",
+    "MiniMax_understand_image": "分析图片",
+    "knowledge_knowledge_search": "搜索知识库",
+    "knowledge_knowledge_save": "保存知识",
+    "memory_memory_save": "保存记忆",
+    "memory_memory_recall": "回忆记忆",
+    "chrome-devtools_navigate_page": "浏览网页",
+    "chrome-devtools_take_screenshot": "截取网页",
+    "chrome-devtools_take_snapshot": "获取网页内容",
+    "chrome-devtools_click": "点击网页元素",
+    "chrome-devtools_fill": "填写表单",
+    "Bash": "执行命令",
+    "Read": "读取文件",
+    "Write": "写入文件",
+    "Edit": "编辑文件",
+    "Glob": "查找文件",
+    "Grep": "搜索代码",
+    "Task": "启动子任务",
+    "task": "启动子任务",
+    "bash": "执行命令",
+    "skill": "加载技能",
+    "todowrite": "管理任务",
+}
+
+_SKILL_DISPLAY_NAMES = {
+    "news-fetcher": "获取新闻",
+    "data-analytics": "数据分析",
+    "dify-analytics": "数据分析",
+    "email-sender": "发送邮件",
+    "xlsx": "处理表格",
+    "pdf": "处理PDF",
+    "docx": "处理文档",
+    "pptx": "处理演示文稿",
+    "smart-bi-creator": "创建数据大屏",
+}
+
+
+def _tool_display_name(tool_name: str) -> str:
+    return _TOOL_DISPLAY_NAMES.get(tool_name, _TOOL_DISPLAY_NAMES.get(tool_name.lower(), tool_name))
+
+
+def _skill_display_name(skill_name: str) -> str:
+    return _SKILL_DISPLAY_NAMES.get(skill_name, _SKILL_DISPLAY_NAMES.get(skill_name.lower(), skill_name))
 
 
 def reload_adapter(channel_id: int):
