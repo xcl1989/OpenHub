@@ -598,6 +598,24 @@ export const adminService = {
     const response = await apiClient.delete(`/admin/failover-chains/${chainId}`);
     return response.data;
   },
+  getSystemHealth: async () => {
+    const response = await apiClient.get('/admin/system/health');
+    return response.data;
+  },
+  getSystemPerformance: async (hours = 24) => {
+    const response = await apiClient.get('/admin/system/performance', { params: { hours } });
+    return response.data;
+  },
+  getRecentErrors: async (limit = 20) => {
+    const response = await apiClient.get('/admin/system/recent-errors', { params: { limit } });
+    return response.data;
+  },
+  getChannelAnalytics: async (days = 30, channelId = null) => {
+    const params = { days };
+    if (channelId) params.channel_id = channelId;
+    const response = await apiClient.get('/admin/channels/analytics', { params });
+    return response.data;
+  },
 };
 
 export const fileService = {

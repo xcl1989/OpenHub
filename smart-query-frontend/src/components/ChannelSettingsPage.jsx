@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Button, Modal, Form, Input, Select, Space, Table, Tag, message,
-  Typography, Popconfirm, Alert, Descriptions, Spin, Divider,
+  Typography, Popconfirm, Alert, Descriptions, Spin, Divider, Tabs,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, ReloadOutlined, SendOutlined,
   ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LinkOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { channelService, adminService } from '../services/api';
+import ChannelAnalytics from './ChannelAnalytics';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -63,6 +65,7 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
   const [editForm] = Form.useForm();
   const [bindForm] = Form.useForm();
   const [testing, setTesting] = useState(null);
+  const [activeTab, setActiveTab] = useState('manage');
 
   const loadChannels = useCallback(async () => {
     setLoading(true);
@@ -271,6 +274,15 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
 
   return (
     <div style={{ padding: '20px 24px' }}>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'manage',
+            label: '渠道管理',
+            children: (
+              <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>
           <LinkOutlined /> 渠道管理
@@ -473,6 +485,16 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
           </Text>
         </div>
       </Modal>
+              </>
+            ),
+          },
+          {
+            key: 'analytics',
+            label: <span><BarChartOutlined /> 数据分析</span>,
+            children: <ChannelAnalytics />,
+          },
+        ]}
+      />
     </div>
   );
 }

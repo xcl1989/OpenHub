@@ -11,7 +11,7 @@ import {
   SettingOutlined, CloudOutlined, CloudServerOutlined, KeyOutlined,
   BarChartOutlined, SafetyOutlined, ThunderboltOutlined,
   MenuOutlined, DatabaseOutlined, BookOutlined, UploadOutlined,
-  SearchOutlined, FileTextOutlined,
+  SearchOutlined, FileTextOutlined, DashboardOutlined,
 } from '@ant-design/icons';
 import {
   Link, useNavigate, useLocation,
@@ -23,6 +23,7 @@ import UsageStats from '../components/UsageStats';
 import ToolPermissionManager from '../components/ToolPermissionManager';
 import SkillManager from '../components/SkillManager';
 import ChannelSettingsPage from '../components/ChannelSettingsPage';
+import SystemHealthDashboard from '../components/SystemHealthDashboard';
 
 const { Title, Text } = Typography;
 const { Sider, Content } = Layout;
@@ -1884,6 +1885,11 @@ const AdminPage = () => {
       icon: <ApiOutlined />,
       label: '渠道管理',
     },
+    {
+      key: 'system-health',
+      icon: <DashboardOutlined />,
+      label: '系统监控',
+    },
   ];
 
   const renderContent = () => {
@@ -1910,6 +1916,9 @@ const AdminPage = () => {
     }
     if (selectedKey === 'channels') {
       return <ChannelSettingsPage isAdmin={true} />;
+    }
+    if (selectedKey === 'system-health') {
+      return <SystemHealthDashboard />;
     }
     return null;
   };

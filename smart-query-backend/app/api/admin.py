@@ -831,3 +831,127 @@ async def admin_delete_failover_chain(
     if ok:
         return {"success": True, "message": "已删除"}
     return {"success": False, "error": "删除失败"}
+
+
+# ========== 系统健康监控 API ==========
+
+
+@router.get("/system/health")
+async def admin_system_health(admin: dict = Depends(get_admin_user)):
+    import time
+
+    result = {}
+
+    opencode_start = time.time()
+    try:
+        response = await opencode_client.get(
+            "/global/health",
+            timeout=5.0,
+        )
+        latency = round((time.time() - opencode_start) * 1000)
+        if response.status_code == 200:
+            data = response.json()
+            result["opencode"] = {
+                "status": "healthy",
+                "version": data.get("version", ""),
+                "latency_ms": latency,
+            }
+        else:
+            result["opencode"] = {"status": "unhealthy", "latency_ms": latency}
+    except Exception as e:
+        result["opencode"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
+
+    mysql_start = time.time()
+    try:
+        from app.database import get_db_connection
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.execute("SHOW GLOBAL STATUS LIKE 'Threads_connected'")
+                threads_row = cursor.fetchone()
+                mysql_latency = round((time.time() - mysql_start) * 1000)
+                result["mysql"] = {
+                    "status": "healthy",
+                    "latency_ms": mysql_latency,
+                    "threads_connected": int(
+                        threads_row["Value"] if threads_row else 0
+                    ),
+                }
+    except Exception as e:
+        result["mysql"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
+
+    redis_start = time.time()
+    try:
+        from app.core.auth import get_redis_client
+
+        redis_client = get_redis_client()
+        redis_client.ping()
+        info = redis_client.info()
+        redis_latency = round((time.time() - redis_start) * 1000)
+        result["redis"] = {
+            "status": "healthy",
+            "latency_ms": redis_latency,
+            "used_memory_mb": round(
+                info.get("used_memory", 0) / 1024 / 1024, 2
+            ),
+            "connected_clients": info.get("connected_clients", 0),
+            "uptime_seconds": info.get("uptime_in_seconds", 0),
+        }
+    except Exception as e:
+        result["redis"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
+
+    try:
+        from app.database import get_db_connection
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM conversation_sessions "
+                    "WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
+                )
+                active = cursor.fetchone()["cnt"]
+        result["sessions"] = {"active_1h": active}
+    except Exception:
+        result["sessions"] = {"active_1h": 0}
+
+    try:
+        from app.services.stream import processing_sessions
+
+        result["sessions"]["processing"] = len(processing_sessions)
+    except Exception:
+        result["sessions"]["processing"] = 0
+
+    return {"success": True, "data": result}
+
+
+@router.get("/system/performance")
+async def admin_system_performance(
+    hours: int = 24, admin: dict = Depends(get_admin_user)
+):
+    from app.database import get_system_performance
+
+    return {"success": True, "data": get_system_performance(hours)}
+
+
+@router.get("/system/recent-errors")
+async def admin_recent_errors(
+    limit: int = 20, admin: dict = Depends(get_admin_user)
+):
+    from app.database import get_recent_errors
+
+    return {"success": True, "data": get_recent_errors(limit)}
+
+
+# ========== 渠道分析 API ==========
+
+
+@router.get("/channels/analytics")
+async def admin_channel_analytics(
+    days: int = 30,
+    channel_id: int | None = None,
+    admin: dict = Depends(get_admin_user),
+):
+    from app.database import get_channel_analytics
+
+    return {"success": True, "data": get_channel_analytics(days, channel_id)}

@@ -2762,3 +2762,203 @@ def log_channel_message(
     except Exception as e:
         print(f"记录渠道消息失败: {e}")
         return None
+
+
+def get_system_performance(hours: int = 24) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT model_id, provider_id,
+                              COUNT(*) as count,
+                              AVG(duration_ms) as avg_ms,
+                              MIN(duration_ms) as min_ms,
+                              MAX(duration_ms) as max_ms
+                       FROM usage_logs
+                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+                       GROUP BY model_id, provider_id
+                       ORDER BY count DESC""",
+                    (hours,),
+                )
+                by_model = [
+                    {
+                        "model_id": row["model_id"],
+                        "provider_id": row["provider_id"],
+                        "count": row["count"],
+                        "avg_ms": round(row["avg_ms"] or 0),
+                        "min_ms": round(row["min_ms"] or 0),
+                        "max_ms": round(row["max_ms"] or 0),
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    """SELECT COUNT(*) as count,
+                              AVG(duration_ms) as avg_ms
+                       FROM usage_logs
+                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+                       AND duration_ms > 120000""",
+                    (hours,),
+                )
+                err = cursor.fetchone()
+                error_count = err["count"] if err else 0
+
+                cursor.execute(
+                    """SELECT COUNT(*) as total
+                       FROM usage_logs
+                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)""",
+                    (hours,),
+                )
+                total = cursor.fetchone()["total"]
+
+                cursor.execute(
+                    """SELECT COUNT(*) as active
+                       FROM conversation_sessions
+                       WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"""
+                )
+                active_sessions = cursor.fetchone()["active"]
+
+                return {
+                    "by_model": by_model,
+                    "total_requests": total,
+                    "error_count": error_count,
+                    "error_rate": round(error_count / total * 100, 2) if total > 0 else 0,
+                    "avg_response_ms": round(
+                        sum(m["avg_ms"] * m["count"] for m in by_model) / total
+                    ) if total > 0 else 0,
+                    "active_sessions": active_sessions,
+                    "hours": hours,
+                }
+    except Exception as e:
+        print(f"获取系统性能数据失败: {e}")
+        return {"by_model": [], "total_requests": 0, "error_count": 0,
+                "error_rate": 0, "avg_response_ms": 0, "active_sessions": 0, "hours": hours}
+
+
+def get_recent_errors(limit: int = 20) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT ul.id, ul.user_id, u.username, ul.session_id,
+                              ul.model_id, ul.provider_id, ul.agent,
+                              ul.question_preview, ul.duration_ms, ul.created_at
+                       FROM usage_logs ul
+                       LEFT JOIN users u ON ul.user_id = u.id
+                       WHERE ul.duration_ms > 120000
+                       ORDER BY ul.created_at DESC
+                       LIMIT %s""",
+                    (limit,),
+                )
+                return [
+                    {
+                        "id": row["id"],
+                        "user_id": row["user_id"],
+                        "username": row["username"] or "-",
+                        "session_id": row["session_id"] or "",
+                        "model_id": row["model_id"] or "",
+                        "provider_id": row["provider_id"] or "",
+                        "agent": row["agent"] or "",
+                        "question_preview": (row["question_preview"] or "")[:100],
+                        "duration_ms": row["duration_ms"],
+                        "created_at": str(row["created_at"]) if row["created_at"] else "",
+                    }
+                    for row in cursor.fetchall()
+                ]
+    except Exception as e:
+        print(f"获取最近错误失败: {e}")
+        return []
+
+
+def get_channel_analytics(days: int = 30, channel_id: int | None = None) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                base_where = "WHERE cm.created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)"
+                params: list = [days]
+
+                if channel_id:
+                    base_where += " AND cm.channel_id = %s"
+                    params.append(channel_id)
+
+                cursor.execute(
+                    f"""SELECT c.id as channel_id, c.name, c.channel_type,
+                               COUNT(*) as total_msgs,
+                               SUM(CASE WHEN cm.direction = 'inbound' THEN 1 ELSE 0 END) as inbound_count,
+                               SUM(CASE WHEN cm.direction = 'outbound' THEN 1 ELSE 0 END) as outbound_count,
+                               SUM(CASE WHEN cm.status = 'failed' THEN 1 ELSE 0 END) as failed_count
+                        FROM channel_messages cm
+                        JOIN channels c ON cm.channel_id = c.id
+                        {base_where}
+                        GROUP BY c.id, c.name, c.channel_type
+                        ORDER BY total_msgs DESC""",
+                    params[:],
+                )
+                by_channel = [
+                    {
+                        "channel_id": row["channel_id"],
+                        "name": row["name"],
+                        "channel_type": row["channel_type"],
+                        "total_msgs": row["total_msgs"],
+                        "inbound_count": row["inbound_count"],
+                        "outbound_count": row["outbound_count"],
+                        "failed_count": row["failed_count"],
+                        "error_rate": round(
+                            row["failed_count"] / row["total_msgs"] * 100, 2
+                        ) if row["total_msgs"] > 0 else 0,
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    f"""SELECT DATE(cm.created_at) as date,
+                               SUM(CASE WHEN cm.direction = 'inbound' THEN 1 ELSE 0 END) as inbound,
+                               SUM(CASE WHEN cm.direction = 'outbound' THEN 1 ELSE 0 END) as outbound
+                        FROM channel_messages cm
+                        {base_where}
+                        GROUP BY DATE(cm.created_at)
+                        ORDER BY date""",
+                    params[:],
+                )
+                daily = [
+                    {
+                        "date": str(row["date"]),
+                        "inbound": row["inbound"],
+                        "outbound": row["outbound"],
+                    }
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    f"""SELECT COUNT(DISTINCT cb.id) as active_bindings
+                        FROM channel_bindings cb
+                        JOIN channel_messages cm ON cm.binding_id = cb.id
+                        {base_where}""",
+                    params[:],
+                )
+                active_bindings = cursor.fetchone()["active_bindings"]
+
+                cursor.execute(
+                    f"""SELECT COUNT(*) as total,
+                              SUM(CASE WHEN cm.status = 'failed' THEN 1 ELSE 0 END) as failed
+                       FROM channel_messages cm
+                       {base_where}""",
+                    params[:],
+                )
+                summary = cursor.fetchone()
+
+                return {
+                    "by_channel": by_channel,
+                    "daily": daily,
+                    "active_bindings": active_bindings,
+                    "total_messages": summary["total"] if summary else 0,
+                    "total_failed": summary["failed"] if summary else 0,
+                    "error_rate": round(
+                        (summary["failed"] or 0) / summary["total"] * 100, 2
+                    ) if summary and summary["total"] > 0 else 0,
+                    "days": days,
+                }
+    except Exception as e:
+        print(f"获取渠道分析数据失败: {e}")
+        return {"by_channel": [], "daily": [], "active_bindings": 0,
+                "total_messages": 0, "total_failed": 0, "error_rate": 0, "days": days}
