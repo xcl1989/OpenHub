@@ -1844,7 +1844,11 @@ def create_smart_entity(
     data_exchange_config: dict = None,
     collaboration_config: dict = None,
     discovery_config: dict = None,
-    capabilities: list = None
+    capabilities: list = None,
+    system_prompt: str = None,
+    model_config: dict = None,
+    knowledge_base_id: int = None,
+    tool_permissions: list = None,
 ) -> dict:
     """创建智能体"""
     try:
@@ -1854,24 +1858,34 @@ def create_smart_entity(
                 config_co = json.dumps(collaboration_config or DEFAULT_COLLABORATION_CONFIG)
                 config_di = json.dumps(discovery_config or DEFAULT_DISCOVERY_CONFIG)
                 caps = json.dumps(capabilities or [])
-                
+                model_cfg = json.dumps(model_config) if model_config else None
+
                 cursor.execute(
-                    """INSERT INTO smart_entities 
+                    """INSERT INTO smart_entities
                        (entity_id, owner_user_id, name, description, base_agent,
-                        data_exchange_config, collaboration_config, discovery_config, capabilities)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        data_exchange_config, collaboration_config, discovery_config, capabilities,
+                        system_prompt, model_config, knowledge_base_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (entity_id, owner_user_id, name, description, base_agent,
-                     config_de, config_co, config_di, caps)
+                     config_de, config_co, config_di, caps,
+                     system_prompt, model_cfg, knowledge_base_id)
                 )
                 conn.commit()
-                
-                # 初始化指标
+
                 cursor.execute(
                     "INSERT INTO smart_entity_metrics (entity_id) VALUES (%s)",
                     (entity_id,)
                 )
                 conn.commit()
-                
+
+                if tool_permissions:
+                    for tool_name in tool_permissions:
+                        cursor.execute(
+                            "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                            (entity_id, tool_name),
+                        )
+                    conn.commit()
+
                 return get_smart_entity(entity_id)
     except Exception as e:
         print(f"创建智能体失败：{e}")
@@ -1936,12 +1950,13 @@ def update_smart_entity(entity_id: str, updates: dict) -> bool:
             with conn.cursor() as cursor:
                 allowed_fields = [
                     'name', 'description', 'base_agent', 'status',
-                    'data_exchange_config', 'collaboration_config', 'discovery_config', 'capabilities'
+                    'data_exchange_config', 'collaboration_config', 'discovery_config', 'capabilities',
+                    'system_prompt', 'model_config', 'knowledge_base_id'
                 ]
-                
+
                 set_parts = []
                 params = []
-                
+
                 for field in allowed_fields:
                     if field in updates:
                         set_parts.append(f"{field} = %s")
@@ -1949,13 +1964,23 @@ def update_smart_entity(entity_id: str, updates: dict) -> bool:
                         if isinstance(value, (dict, list)):
                             value = json.dumps(value)
                         params.append(value)
-                
-                if not set_parts:
-                    return False
-                
-                params.append(entity_id)
-                sql = f"UPDATE smart_entities SET {', '.join(set_parts)} WHERE entity_id = %s"
-                cursor.execute(sql, params)
+
+                if set_parts:
+                    params.append(entity_id)
+                    sql = f"UPDATE smart_entities SET {', '.join(set_parts)} WHERE entity_id = %s"
+                    cursor.execute(sql, params)
+
+                if 'tool_permissions' in updates:
+                    cursor.execute(
+                        "DELETE FROM entity_tool_permissions WHERE entity_id = %s",
+                        (entity_id,)
+                    )
+                    for tool_name in updates['tool_permissions']:
+                        cursor.execute(
+                            "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                            (entity_id, tool_name),
+                        )
+
                 conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
@@ -2095,11 +2120,26 @@ def update_smart_entity_task_status(task_id: str, status: str, output_data: dict
                     )
                 elif status in ["completed", "rejected", "timeout", "failed"]:
                     cursor.execute(
-                        """UPDATE smart_entity_tasks 
-                           SET status = %s, completed_at = %s, output_data = %s, error_message = %s 
+                        """UPDATE smart_entity_tasks
+                           SET status = %s, completed_at = %s, output_data = %s, error_message = %s
                            WHERE task_id = %s""",
                         (status, now, json.dumps(output_data or {}), error_message, task_id)
                     )
+                    cursor.execute(
+                        "SELECT to_entity_id, started_at FROM smart_entity_tasks WHERE task_id = %s",
+                        (task_id,)
+                    )
+                    task = cursor.fetchone()
+                    if task:
+                        proc_time = 0
+                        if task.get("started_at"):
+                            delta = now - task["started_at"]
+                            proc_time = int(delta.total_seconds())
+                        update_entity_metrics(
+                            task["to_entity_id"],
+                            completed=(status == "completed"),
+                            processing_time=proc_time,
+                        )
                 else:
                     cursor.execute(
                         "UPDATE smart_entity_tasks SET status = %s WHERE task_id = %s",
@@ -2125,6 +2165,103 @@ def increment_task_attempt(task_id: str) -> bool:
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"增加任务重试次数失败：{e}")
+        return False
+
+
+def get_entity_metrics(entity_id: str) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM smart_entity_metrics WHERE entity_id = %s",
+                    (entity_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "entity_id": row["entity_id"],
+                        "total_tasks_received": row["total_tasks_received"],
+                        "total_tasks_completed": row["total_tasks_completed"],
+                        "total_tasks_failed": row["total_tasks_failed"],
+                        "total_processing_time": row["total_processing_time"],
+                        "avg_response_time": row["avg_response_time"],
+                        "last_task_at": str(row["last_task_at"]) if row["last_task_at"] else None,
+                        "daily_quota": row["daily_quota"],
+                        "daily_used": row["daily_used"],
+                    }
+        return None
+    except Exception as e:
+        print(f"获取智能体指标失败：{e}")
+        return None
+
+
+def update_entity_metrics(
+    entity_id: str,
+    completed: bool = True,
+    processing_time: int = 0,
+) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE smart_entity_metrics SET total_tasks_received = total_tasks_received + 1, "
+                    "last_task_at = NOW() WHERE entity_id = %s",
+                    (entity_id,)
+                )
+                if completed:
+                    cursor.execute(
+                        "UPDATE smart_entity_metrics SET total_tasks_completed = total_tasks_completed + 1, "
+                        "total_processing_time = total_processing_time + %s WHERE entity_id = %s",
+                        (processing_time, entity_id)
+                    )
+                    cursor.execute(
+                        "UPDATE smart_entity_metrics SET avg_response_time = "
+                        "total_processing_time / GREATEST(total_tasks_completed, 1) WHERE entity_id = %s",
+                        (entity_id,)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE smart_entity_metrics SET total_tasks_failed = total_tasks_failed + 1 WHERE entity_id = %s",
+                        (entity_id,)
+                    )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"更新智能体指标失败：{e}")
+        return False
+
+
+def get_entity_tool_permissions(entity_id: str) -> list[str]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT tool_name FROM entity_tool_permissions WHERE entity_id = %s AND action = 'allow'",
+                    (entity_id,)
+                )
+                return [row["tool_name"] for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"获取智能体工具权限失败：{e}")
+        return []
+
+
+def set_entity_tool_permissions(entity_id: str, tool_names: list[str]) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM entity_tool_permissions WHERE entity_id = %s",
+                    (entity_id,)
+                )
+                for tool_name in tool_names:
+                    cursor.execute(
+                        "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                        (entity_id, tool_name),
+                    )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"设置智能体工具权限失败：{e}")
         return False
 
 

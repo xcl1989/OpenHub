@@ -260,6 +260,9 @@ TABLES = {
             collaboration_config JSON,
             discovery_config JSON,
             capabilities JSON,
+            system_prompt TEXT,
+            model_config JSON,
+            knowledge_base_id INT,
             status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -351,6 +354,16 @@ TABLES = {
             FOREIGN KEY (task_id) REFERENCES smart_entity_tasks(task_id),
             INDEX idx_task (task_id),
             INDEX idx_entity (entity_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "entity_tool_permissions": """
+        CREATE TABLE IF NOT EXISTS entity_tool_permissions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            entity_id VARCHAR(100) NOT NULL,
+            tool_name VARCHAR(100) NOT NULL,
+            action ENUM('deny', 'allow') DEFAULT 'allow',
+            UNIQUE KEY idx_entity_tool (entity_id, tool_name),
+            FOREIGN KEY (entity_id) REFERENCES smart_entities(entity_id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "knowledge_bases": """
@@ -562,6 +575,9 @@ def init_database():
             "CREATE INDEX idx_session_visible ON conversation_messages(session_id, visible)",
             "ALTER TABLE tool_permissions MODIFY COLUMN risk_level ENUM('safe', 'moderate', 'dangerous', 'custom') DEFAULT 'safe'",
             "ALTER TABLE git_snapshots MODIFY COLUMN session_id VARCHAR(128) COLLATE utf8mb4_unicode_ci",
+            "ALTER TABLE smart_entities ADD COLUMN system_prompt TEXT",
+            "ALTER TABLE smart_entities ADD COLUMN model_config JSON",
+            "ALTER TABLE smart_entities ADD COLUMN knowledge_base_id INT",
         ]
         for sql in MIGRATIONS:
             try:

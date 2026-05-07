@@ -538,6 +538,10 @@ export const adminService = {
     const response = await apiClient.get('/admin/tools');
     return response.data;
   },
+  getAllToolPermissions: async () => {
+    const response = await apiClient.get('/admin/tools');
+    return response.data;
+  },
   updateTool: async (toolName, action) => {
     const response = await apiClient.put(`/admin/tools/${toolName}`, null, { params: { action } });
     return response.data;
@@ -734,33 +738,40 @@ export default apiClient;
 
 // 智能体管理服务
 export const smartEntityService = {
-  // 获取智能体列表
   list: async () => {
     const response = await apiClient.get('/smart-entities');
     return response.data;
   },
-  
-  // 获取单个智能体
   get: async (entityId) => {
     const response = await apiClient.get(`/smart-entities/${entityId}`);
     return response.data;
   },
-  
-  // 创建智能体
   create: async (data) => {
     const response = await apiClient.post('/smart-entities', data);
     return response.data;
   },
-  
-  // 更新智能体
   update: async (entityId, data) => {
     const response = await apiClient.put(`/smart-entities/${entityId}`, data);
     return response.data;
   },
-  
-  // 删除智能体
   delete: async (entityId) => {
     const response = await apiClient.delete(`/smart-entities/${entityId}`);
+    return response.data;
+  },
+  getMetrics: async (entityId) => {
+    const response = await apiClient.get(`/smart-entities/${entityId}/metrics`);
+    return response.data;
+  },
+  getTools: async (entityId) => {
+    const response = await apiClient.get(`/smart-entities/${entityId}/tools`);
+    return response.data;
+  },
+  setTools: async (entityId, toolNames) => {
+    const response = await apiClient.put(`/smart-entities/${entityId}/tools`, { tool_names: toolNames });
+    return response.data;
+  },
+  test: async (entityId, message) => {
+    const response = await apiClient.post(`/smart-entities/${entityId}/test`, { message });
     return response.data;
   },
 };

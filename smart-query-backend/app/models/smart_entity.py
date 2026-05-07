@@ -46,10 +46,14 @@ class SmartEntityCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="智能体名称")
     description: str = Field(..., min_length=1, description="智能体描述")
     base_agent: Literal["build", "plan", "task"] = Field(default="build", description="基础智能体类型")
+    system_prompt: Optional[str] = Field(default=None, description="系统提示词")
+    model: Optional[dict] = Field(default=None, description="专属模型配置 {providerID, modelID}")
+    knowledge_base_id: Optional[int] = Field(default=None, description="绑定知识库ID")
     data_exchange_config: DataExchangeConfig = Field(default_factory=DataExchangeConfig)
     collaboration_config: CollaborationConfig = Field(default_factory=CollaborationConfig)
     discovery_config: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     capabilities: list[Capability] = Field(default_factory=list, description="能力列表")
+    tool_permissions: Optional[list[str]] = Field(default=None, description="工具权限列表")
 
 
 class SmartEntityUpdate(BaseModel):
@@ -57,10 +61,14 @@ class SmartEntityUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
     description: Optional[str] = None
     base_agent: Optional[Literal["build", "plan", "task"]] = None
+    system_prompt: Optional[str] = None
+    model: Optional[dict] = None
+    knowledge_base_id: Optional[int] = None
     data_exchange_config: Optional[DataExchangeConfig] = None
     collaboration_config: Optional[CollaborationConfig] = None
     discovery_config: Optional[DiscoveryConfig] = None
     capabilities: Optional[list[Capability]] = None
+    tool_permissions: Optional[list[str]] = None
     status: Optional[Literal["active", "inactive", "suspended"]] = None
 
 
@@ -71,10 +79,14 @@ class SmartEntityResponse(BaseModel):
     name: str
     description: str
     base_agent: str
+    system_prompt: Optional[str] = None
+    model: Optional[dict] = None
+    knowledge_base_id: Optional[int] = None
     data_exchange_config: dict
     collaboration_config: dict
     discovery_config: dict
     capabilities: list[dict]
+    tool_permissions: list[str] = []
     status: str
     created_at: str
     updated_at: str
@@ -148,3 +160,13 @@ class SmartEntityMetricResponse(BaseModel):
     last_task_at: Optional[str] = None
     daily_quota: int
     daily_used: int
+
+
+class EntityToolPermissionsUpdate(BaseModel):
+    """智能体工具权限更新"""
+    tool_names: list[str] = Field(..., description="允许使用的工具名列表")
+
+
+class EntityTestChatRequest(BaseModel):
+    """智能体测试聊天请求"""
+    message: str = Field(..., min_length=1, description="测试消息")
