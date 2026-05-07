@@ -28,6 +28,14 @@ API_PREFIXES = ("/api/", "/docs", "/redoc", "/openapi.json")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app import database
+    from app.config import config
+
+    if not config.JWT_SECRET_KEY:
+        print(
+            "[SECURITY WARNING] JWT_SECRET_KEY is not set! "
+            "Tokens are insecure. Set JWT_SECRET_KEY in .env for production.",
+            flush=True,
+        )
 
     auto_start_raw = database.get_system_config("opencode_auto_start")
     if auto_start_raw == "true":

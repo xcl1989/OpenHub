@@ -19,10 +19,7 @@ class Config:
     OPENCODE_USERNAME = os.getenv("OPENCODE_USERNAME", "opencode")
     OPENCODE_PASSWORD = os.getenv("OPENCODE_PASSWORD", "")
 
-    JWT_SECRET_KEY = os.getenv(
-        "JWT_SECRET_KEY",
-        "sk-dev-fallback-change-in-production",
-    )
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "sk-dev-fallback-change-in-production")
     JWT_ALGORITHM = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 

@@ -244,7 +244,7 @@ async def _process_channel_query(
         max_wait_count = 6
         wait_interval = 60.0
 
-        stream_client = await opencode_client.get_client_for_stream()
+        stream_client = await opencode_client.get_client()
         async with stream_client.stream(
             "GET",
             f"{config.OPENCODE_BASE_URL}/global/event",

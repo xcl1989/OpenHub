@@ -255,7 +255,7 @@ async def _background_collector(
     await asyncio.to_thread(database.save_session, session_id, title, user_id)
 
     try:
-        client = await opencode_client.get_client_for_stream()
+        client = await opencode_client.get_client()
 
         await asyncio.to_thread(
             _write_log,
@@ -736,33 +736,6 @@ async def _save_message_to_db(
         del message_tools[message_id]
     if message_id in message_reasoning:
         del message_reasoning[message_id]
-
-
-async def _push_event_to_queue(
-    queue: asyncio.Queue,
-    event_type: str,
-    properties: dict,
-    log_file: Path,
-):
-    if event_type == "message.part.updated":
-        part = properties.get("part", {})
-        part_type = part.get("type", "")
-        text = part.get("text", "")
-
-        if part_type == "step-start":
-            msg = {"type": "step-start", "done": False}
-            await asyncio.to_thread(_write_log, log_file, f"[SEND] -> queue: {msg}\n")
-            await queue.put(f"data: {json.dumps(msg)}\n\n")
-
-        elif part_type == "reasoning" and text:
-            for i in range(0, max(len(text), 1), 10):
-                chunk = text[i : i + 10]
-                msg = {
-                    "type": "reasoning",
-                    "content": chunk,
-                    "done": False,
-                }
-        await queue.put(f"data: {json.dumps(msg)}\n\n")
 
 
 def _extract_skill_from_tool_name(tool_name: str) -> str | None:

@@ -833,17 +833,6 @@ def set_system_config(key: str, value: str) -> bool:
         return False
 
 
-def get_user_by_id(user_id: int) -> Optional[dict]:
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-                return cursor.fetchone()
-    except Exception as e:
-        print(f"获取用户失败: {e}")
-        return None
-
-
 def get_user_workspace(user_id: int) -> Optional[str]:
     """
     获取用户工作空间路径（优先从 Redis 缓存读取）

@@ -68,14 +68,5 @@ class OpenCodeClient:
             kwargs["params"] = params
         return await client.patch(url, **kwargs)
 
-    async def get_client_for_stream(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(120.0, connect=10.0),
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
-                transport=httpx.AsyncHTTPTransport(retries=3),
-            )
-        return self._client
-
 
 opencode_client = OpenCodeClient()

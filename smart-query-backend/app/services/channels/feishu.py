@@ -26,24 +26,39 @@ class FeishuAdapter(ChannelAdapter):
         self.bot_name = config.get("bot_name", "OpenHub")
         self._tenant_token: str = ""
         self._token_expire: float = 0
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0, connect=10.0),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=30),
+            )
+        return self._http_client
+
+    async def close(self):
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def _get_tenant_token(self) -> str:
         now = time.time()
         if self._tenant_token and now < self._token_expire - 60:
             return self._tenant_token
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{FEISHU_BASE_URL}/auth/v3/tenant_access_token/internal/",
-                json={"app_id": self.app_id, "app_secret": self.app_secret},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("code") != 0:
-                raise RuntimeError(f"飞书 token 获取失败: {data.get('msg')}")
-            self._tenant_token = data["tenant_access_token"]
-            self._token_expire = now + data.get("expire", 7200)
-            return self._tenant_token
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/auth/v3/tenant_access_token/internal/",
+            json={"app_id": self.app_id, "app_secret": self.app_secret},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"飞书 token 获取失败: {data.get('msg')}")
+        self._tenant_token = data["tenant_access_token"]
+        self._token_expire = now + data.get("expire", 7200)
+        return self._tenant_token
 
     async def verify_request(self, request_body: dict, headers: dict) -> bool:
         if request_body.get("type") == "url_verification":
@@ -147,29 +162,29 @@ class FeishuAdapter(ChannelAdapter):
             "content": json.dumps(content_obj, ensure_ascii=False),
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{FEISHU_BASE_URL}/im/v1/messages",
-                params={"receive_id_type": "chat_id"},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/im/v1/messages",
+            params={"receive_id_type": "chat_id"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                return True
+            logger.warning(
+                "飞书发送消息失败: %s %s", data.get("code"), data.get("msg")
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == 0:
-                    return True
-                logger.warning(
-                    "飞书发送消息失败: %s %s", data.get("code"), data.get("msg")
-                )
-            else:
-                logger.warning(
-                    "飞书发送消息 HTTP 错误: %d body=%s",
-                    resp.status_code,
-                    resp.text[:300],
-                )
+        else:
+            logger.warning(
+                "飞书发送消息 HTTP 错误: %d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
         return False
 
     async def smart_send(self, receive_id: str, text: str) -> bool:
@@ -204,25 +219,25 @@ class FeishuAdapter(ChannelAdapter):
             "content": json.dumps(content_obj, ensure_ascii=False),
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{FEISHU_BASE_URL}/im/v1/messages",
-                params={"receive_id_type": "chat_id"},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/im/v1/messages",
+            params={"receive_id_type": "chat_id"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                return True
+            logger.warning(
+                "飞书富文本发送失败: %s %s", data.get("code"), data.get("msg")
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == 0:
-                    return True
-                logger.warning(
-                    "飞书富文本发送失败: %s %s", data.get("code"), data.get("msg")
-                )
-            else:
-                logger.warning("飞书富文本 HTTP 错误: %d", resp.status_code)
+        else:
+            logger.warning("飞书富文本 HTTP 错误: %d", resp.status_code)
 
         return await self.send_message(receive_id, text, "text")
 
@@ -236,25 +251,25 @@ class FeishuAdapter(ChannelAdapter):
             "content": json.dumps(card, ensure_ascii=False),
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{FEISHU_BASE_URL}/im/v1/messages",
-                params={"receive_id_type": "chat_id"},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/im/v1/messages",
+            params={"receive_id_type": "chat_id"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                return True
+            logger.warning(
+                "飞书卡片发送失败: %s %s", data.get("code"), data.get("msg")
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == 0:
-                    return True
-                logger.warning(
-                    "飞书卡片发送失败: %s %s", data.get("code"), data.get("msg")
-                )
-            else:
-                logger.warning("飞书卡片 HTTP 错误: %d", resp.status_code)
+        else:
+            logger.warning("飞书卡片 HTTP 错误: %d", resp.status_code)
 
         return await self.send_message(receive_id, text, "text")
 
