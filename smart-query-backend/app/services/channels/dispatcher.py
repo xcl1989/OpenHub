@@ -196,10 +196,27 @@ async def _process_channel_query(
             None, "build", model_str, None, turn_id,
         )
 
-        channel_hint = "你正在通过飞书聊天回复用户消息。请直接用中文自然语言回复，不要输出 JSON、代码块或 markdown 格式，就像普通聊天一样。回复要简洁、友好。"
+        channel_hint = "你正在通过飞书聊天回复用户消息。请用中文回复，可以使用 Markdown 格式（加粗 **bold**、列表、表格、代码块 ```）。不要输出 JSON 格式。回复要简洁、友好。"
+        chart_hint = (
+            "数据可视化：使用 ```chart 代码块输出交互式图表。示例：\n"
+            "```chart\n"
+            '{"type":"bar","title":{"text":"标题"},"data":{"values":[{"name":"A","value":100}]},"xField":"name","yField":"value"}\n'
+            "```\n"
+            "type: line/area/bar/pie/scatter/radar/funnel/linearProgress/circularProgress/wordCloud/common(组合)\n"
+            "- bar: xField,yField。加direction:\"horizontal\"→条形图\n"
+            '- pie: valueField,categoryField。加innerRadius:0.5→环形图\n'
+            "- line/area/scatter: xField,yField\n"
+            "- radar/funnel: categoryField,valueField\n"
+            "- wordCloud: nameField,valueField\n"
+            "- common: series[{type,dataIndex,...}]，data为多数组\n"
+            "- linearProgress: xField,yField\n"
+            "- circularProgress: valueField,categoryField\n"
+            '可加legends:{"visible":true}。每个卡片最多5个图表。'
+        )
         prompt_body = {
             "parts": [
                 {"type": "text", "text": channel_hint},
+                {"type": "text", "text": chart_hint},
                 {"type": "text", "text": question},
             ],
             "agent": "build",
@@ -382,7 +399,10 @@ async def _process_channel_query(
 
 async def _safe_send(adapter, chat_id, text):
     try:
-        await adapter.send_message(chat_id, text)
+        if hasattr(adapter, "smart_send"):
+            await adapter.smart_send(chat_id, text)
+        else:
+            await adapter.send_message(chat_id, text)
     except Exception as e:
         print(f"[ChannelDispatcher] _safe_send error: {e}", flush=True)
 
