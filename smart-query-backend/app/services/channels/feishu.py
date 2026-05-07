@@ -119,6 +119,9 @@ class FeishuAdapter(ChannelAdapter):
                         elif element.get("tag") == "at":
                             lines.append(element.get("user_name", ""))
                 text = "".join(lines)
+            elif msg_type == "image":
+                image_key = content.get("image_key", "")
+                text = f"[用户发送了一张图片 image_key={image_key}]"
         except json.JSONDecodeError:
             text = content_str
 

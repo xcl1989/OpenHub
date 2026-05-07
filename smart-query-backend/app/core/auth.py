@@ -106,6 +106,13 @@ class InMemoryStore:
             return True
         return False
 
+    def incr(self, key: str) -> int:
+        val = int(self._store.get(key, "0")) + 1
+        self._store[key] = str(val)
+        if key not in self._expiry:
+            self._expiry[key] = datetime.max
+        return val
+
     def exists(self, key: str) -> bool:
         if key in self._expiry and datetime.now() > self._expiry[key]:
             self._store.pop(key, None)

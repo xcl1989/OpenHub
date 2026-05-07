@@ -1594,13 +1594,13 @@ def get_notifications(user_id: int, unread_only: bool = False):
         return []
 
 
-def mark_notification_read(notif_id: int) -> bool:
+def mark_notification_read(notif_id: int, user_id: int) -> bool:
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE notifications SET is_read = 1 WHERE id = %s",
-                    (notif_id,),
+                    "UPDATE notifications SET is_read = 1 WHERE id = %s AND user_id = %s",
+                    (notif_id, user_id),
                 )
                 conn.commit()
                 return cursor.rowcount > 0

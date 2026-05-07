@@ -228,7 +228,7 @@ async def mark_notification_read(
 ):
     from app import database as db
 
-    ok = db.mark_notification_read(notif_id)
+    ok = db.mark_notification_read(notif_id, current_user["id"])
     return {"ok": ok}
 
 

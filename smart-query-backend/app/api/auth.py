@@ -42,19 +42,30 @@ class LogoutResponse(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
-    """
-    用户登录
-    验证用户名和密码，返回 JWT token
-    """
-    # 认证用户
-    user = authenticate_user(request.username, request.password)
+async def login(request: Request, body: LoginRequest):
+    from app.core.auth import get_redis_client
+
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = f"login_rate:{client_ip}:{body.username}"
+    redis_client = get_redis_client()
+    count = redis_client.incr(rate_key)
+    if count == 1:
+        redis_client.expire(rate_key, 60)
+    if count > 5:
+        raise HTTPException(
+            status_code=429,
+            detail="登录尝试过于频繁，请1分钟后再试",
+        )
+
+    user = authenticate_user(body.username, body.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    redis_client.delete(rate_key)
 
     # 创建 access token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
