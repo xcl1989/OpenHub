@@ -44,6 +44,18 @@ function FeishuConfigForm({ form, models }) {
           ))}
         </Select>
       </Form.Item>
+      <Form.Item name="image_model" label="图片模型" extra="当用户发送图片时使用此模型，留空则使用默认模型">
+        <Select placeholder="留空则使用默认模型" allowClear showSearch optionFilterProp="label" loading={!models}>
+          {(models || []).map(m => (
+            <Option key={`${m.providerID}|${m.modelID}`} value={`${m.providerID}|${m.modelID}`} label={`${m.name || m.modelID}`}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>{m.name || m.modelID}</span>
+                <Text type="secondary" style={{ fontSize: 11 }}>{m.providerName || m.providerID}</Text>
+              </div>
+            </Option>
+          ))}
+        </Select>
+      </Form.Item>
     </>
   );
 }
@@ -105,6 +117,10 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
         const [providerID, modelID] = values.model.split('|', 2);
         config.model = { providerID, modelID };
       }
+      if (values.image_model) {
+        const [providerID, modelID] = values.image_model.split('|', 2);
+        config.image_model = { providerID, modelID };
+      }
 
       await channelService.createChannel({
         channel_type: values.channel_type,
@@ -157,16 +173,23 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
     const cfg = channel.config || {};
     if (typeof cfg === 'string') { try { JSON.parse(cfg); } catch { return '-'; } }
     const m = cfg.model;
-    if (!m || !m.modelID) return <Text type="secondary">全局默认</Text>;
-    return <Tag color="blue">{m.modelID}</Tag>;
+    const im = cfg.image_model;
+    return (
+      <Space size="small">
+        {m && m.modelID ? <Tag color="blue">{m.modelID}</Tag> : <Text type="secondary">全局默认</Text>}
+        {im && im.modelID ? <Tag color="purple">图片: {im.modelID}</Tag> : null}
+      </Space>
+    );
   };
 
   const openEditModal = (channel) => {
     setEditingChannel(channel);
     const cfg = typeof channel.config === 'string' ? JSON.parse(channel.config || '{}') : (channel.config || {});
     const m = cfg.model;
+    const im = cfg.image_model;
     editForm.setFieldsValue({
       model: m && m.providerID && m.modelID ? `${m.providerID}|${m.modelID}` : undefined,
+      image_model: im && im.providerID && im.modelID ? `${im.providerID}|${im.modelID}` : undefined,
     });
     setEditModalVisible(true);
   };
@@ -209,6 +232,10 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
       if (values.model) {
         const [providerID, modelID] = values.model.split('|', 2);
         newConfig.model = { providerID, modelID };
+      }
+      if (values.image_model) {
+        const [providerID, modelID] = values.image_model.split('|', 2);
+        newConfig.image_model = { providerID, modelID };
       }
 
       await channelService.updateChannel(editingChannel.id, { config: newConfig });
@@ -413,6 +440,18 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
         <Form form={editForm} layout="vertical">
           <Form.Item name="model" label="默认模型">
             <Select placeholder="留空则使用全局默认模型" allowClear showSearch optionFilterProp="label" loading={!models}>
+              {(models || []).map(m => (
+                <Option key={`${m.providerID}|${m.modelID}`} value={`${m.providerID}|${m.modelID}`} label={`${m.name || m.modelID}`}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{m.name || m.modelID}</span>
+                    <Text type="secondary" style={{ fontSize: 11 }}>{m.providerName || m.providerID}</Text>
+                  </div>
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="image_model" label="图片模型">
+            <Select placeholder="留空则使用默认模型" allowClear showSearch optionFilterProp="label" loading={!models}>
               {(models || []).map(m => (
                 <Option key={`${m.providerID}|${m.modelID}`} value={`${m.providerID}|${m.modelID}`} label={`${m.name || m.modelID}`}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>

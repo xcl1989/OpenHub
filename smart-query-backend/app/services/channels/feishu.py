@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -60,6 +61,20 @@ class FeishuAdapter(ChannelAdapter):
         self._token_expire = now + data.get("expire", 7200)
         return self._tenant_token
 
+    async def _download_image(self, message_id: str, image_key: str) -> tuple[str, str]:
+        token = await self._get_tenant_token()
+        client = await self._get_http_client()
+        resp = await client.get(
+            f"{FEISHU_BASE_URL}/im/v1/messages/{message_id}/resources/{image_key}",
+            params={"type": "image"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "image/jpeg")
+        mime = content_type.split(";")[0].strip()
+        return base64.b64encode(resp.content).decode(), mime
+
     async def verify_request(self, request_body: dict, headers: dict) -> bool:
         if request_body.get("type") == "url_verification":
             return True
@@ -101,9 +116,12 @@ class FeishuAdapter(ChannelAdapter):
         chat_id = message.get("chat_id", "")
         chat_type = message.get("chat_type", "p2p")
         msg_type = message.get("message_type", "text")
+        msg_id = message.get("message_id", "")
         content_str = message.get("content", "{}")
 
         text = ""
+        image_base64 = ""
+        image_mime = ""
         try:
             content = (
                 json.loads(content_str) if isinstance(content_str, str) else content_str
@@ -121,7 +139,14 @@ class FeishuAdapter(ChannelAdapter):
                 text = "".join(lines)
             elif msg_type == "image":
                 image_key = content.get("image_key", "")
-                text = f"[用户发送了一张图片 image_key={image_key}]"
+                text = "[用户发送了一张图片，见下方]"
+                image_base64 = ""
+                image_mime = ""
+                if image_key:
+                    try:
+                        image_base64, image_mime = await self._download_image(msg_id, image_key)
+                    except Exception as e:
+                        logger.warning("下载飞书图片失败 msg_id=%s image_key=%s: %s", msg_id, image_key, e)
         except json.JSONDecodeError:
             text = content_str
 
@@ -138,6 +163,9 @@ class FeishuAdapter(ChannelAdapter):
             is_group=(chat_type == "group"),
             at_bot=at_bot,
             raw=request_body,
+            image_base64=image_base64,
+            image_mime=image_mime,
+            message_id=msg_id,
         )
 
     async def send_message(

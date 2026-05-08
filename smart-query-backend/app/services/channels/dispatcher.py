@@ -127,6 +127,9 @@ async def handle_inbound(
             binding=binding,
             adapter=adapter,
             question=channel_msg.content,
+            content_type=channel_msg.content_type,
+            image_base64=channel_msg.image_base64,
+            image_mime=channel_msg.image_mime,
             workspace_path=workspace_path,
             chat_id=channel_msg.external_chat_id,
             channel_config=channel.get("config", {}),
@@ -142,8 +145,11 @@ async def _process_channel_query(
     binding: dict,
     adapter: ChannelAdapter,
     question: str,
-    workspace_path: str | None,
-    chat_id: str,
+    content_type: str = "text",
+    image_base64: str = "",
+    image_mime: str = "",
+    workspace_path: str | None = None,
+    chat_id: str = "",
     channel_config: dict | None = None,
     owner_id: int | None = None,
 ):
@@ -158,7 +164,10 @@ async def _process_channel_query(
         channel_config = channel_config or {}
 
         ch_model = channel_config.get("model")
-        if ch_model and isinstance(ch_model, dict) and ch_model.get("modelID"):
+        img_model = channel_config.get("image_model")
+        if content_type == "image" and img_model and isinstance(img_model, dict) and img_model.get("modelID"):
+            model_config = img_model
+        elif ch_model and isinstance(ch_model, dict) and ch_model.get("modelID"):
             model_config = ch_model
         else:
             model_config = await get_default_model()
@@ -222,6 +231,14 @@ async def _process_channel_query(
             "agent": "build",
             "model": model_config,
         }
+        if image_base64:
+            mime = image_mime or "image/jpeg"
+            prompt_body["parts"].append({
+                "type": "file",
+                "mime": mime,
+                "url": f"data:{mime};base64,{image_base64}",
+                "filename": f"image.{mime.split('/')[-1]}",
+            })
         prompt_resp = await client.post(
             f"{config.OPENCODE_BASE_URL}/session/{oc_session_id}/prompt_async",
             params={"directory": workspace_path} if workspace_path else None,

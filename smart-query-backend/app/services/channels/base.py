@@ -11,6 +11,9 @@ class ChannelMessage:
     is_group: bool = False
     at_bot: bool = False
     raw: dict = field(default_factory=dict)
+    image_base64: str = ""
+    image_mime: str = ""
+    message_id: str = ""
 
 
 class ChannelAdapter(ABC):
