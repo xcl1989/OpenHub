@@ -821,6 +821,14 @@ export const teamService = {
     const response = await apiClient.delete(`/smart-entity-teams/${teamId}`);
     return response.data;
   },
+  autoCreate: async (requirement) => {
+    const response = await apiClient.post('/smart-entity-teams/auto-create', { requirement });
+    return response.data;
+  },
+  execute: async (teamId, taskDescription) => {
+    const response = await apiClient.post(`/smart-entity-teams/${teamId}/execute`, { task_description: taskDescription });
+    return response.data;
+  },
 };
 
 export const knowledgeService = {

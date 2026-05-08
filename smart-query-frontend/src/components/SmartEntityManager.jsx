@@ -129,6 +129,7 @@ function SmartEntityManager({ open, onClose, isMobile }) {
     const dc = entity.discovery_config || {};
     const cc = entity.collaboration_config || {};
     editForm.setFieldsValue({
+      entity_id: entity.entity_id,
       name: entity.name,
       description: entity.description,
       base_agent: entity.base_agent,

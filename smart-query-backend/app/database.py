@@ -1119,6 +1119,8 @@ def sync_tools_from_opencode() -> list:
         "smart_entity_task_action": ("custom", "操作智能体任务（接受/拒绝/取消）"),
         "smart_entity_task_wait": ("custom", "委托任务并等待结果"),
         "smart_entity_batch": ("custom", "批量派发任务到多个智能体"),
+        "smart_entity_auto_team": ("custom", "自动组建智能体团队"),
+        "smart_entity_team_execute": ("custom", "让智能体团队执行任务"),
         "knowledge_knowledge_search": ("safe", "搜索知识库"),
         "knowledge_knowledge_list": ("safe", "列出知识库内容"),
         "knowledge_knowledge_info": ("safe", "查看知识库概览"),
@@ -2273,15 +2275,28 @@ def create_team(
     orchestrator_entity_id: str,
     member_entity_ids: list[str],
     description: str = "",
+    team_prompt: str = "",
+    routing_config: dict | None = None,
+    is_permanent: bool = True,
 ) -> dict | None:
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """INSERT INTO smart_entity_teams
-                       (name, description, owner_user_id, orchestrator_entity_id, member_entity_ids)
-                       VALUES (%s, %s, %s, %s, %s)""",
-                    (name, description, owner_user_id, orchestrator_entity_id, json.dumps(member_entity_ids)),
+                       (name, description, owner_user_id, orchestrator_entity_id,
+                        member_entity_ids, team_prompt, routing_config, is_permanent)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        name,
+                        description,
+                        owner_user_id,
+                        orchestrator_entity_id,
+                        json.dumps(member_entity_ids),
+                        team_prompt,
+                        json.dumps(routing_config) if routing_config else None,
+                        1 if is_permanent else 0,
+                    ),
                 )
                 conn.commit()
                 return get_team(cursor.lastrowid)
@@ -2300,6 +2315,8 @@ def get_team(team_id: int) -> dict | None:
                     result = dict(row)
                     if isinstance(result.get("member_entity_ids"), str):
                         result["member_entity_ids"] = json.loads(result["member_entity_ids"])
+                    if isinstance(result.get("routing_config"), str):
+                        result["routing_config"] = json.loads(result["routing_config"])
                     return result
         return None
     except Exception as e:
@@ -2331,7 +2348,7 @@ def update_team(team_id: int, updates: dict) -> bool:
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
-                allowed = ["name", "description", "orchestrator_entity_id", "member_entity_ids", "status"]
+                allowed = ["name", "description", "orchestrator_entity_id", "member_entity_ids", "status", "team_prompt", "routing_config", "is_permanent"]
                 parts = []
                 params = []
                 for f in allowed:

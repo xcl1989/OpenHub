@@ -1,16 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Modal, Form, Input, Select, Tag, Space, Empty, Spin, message, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, TeamOutlined, RobotOutlined } from '@ant-design/icons';
+import { Card, Button, Modal, Form, Input, Select, Tag, Space, Empty, Spin, message, Popconfirm, Typography } from 'antd';
+import { PlusOutlined, DeleteOutlined, TeamOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { teamService, smartEntityService } from '../services/api';
 
 const { TextArea } = Input;
+const { Paragraph } = Typography;
 
 function TeamManager({ isMobile }) {
   const [teams, setTeams] = useState([]);
   const [myEntities, setMyEntities] = useState([]);
   const [loading, setLoading] = useState(false);
   const [createVisible, setCreateVisible] = useState(false);
+  const [execTeam, setExecTeam] = useState(null);
+  const [execLoading, setExecLoading] = useState(false);
+  const [execResult, setExecResult] = useState(null);
   const [form] = Form.useForm();
+  const [execForm] = Form.useForm();
 
   useEffect(() => {
     fetchData();
@@ -52,6 +57,42 @@ function TeamManager({ isMobile }) {
     }
   };
 
+  const handleExecute = async () => {
+    const desc = execForm.getFieldValue('task_description');
+    if (!desc || desc.trim().length < 5) {
+      message.warning('请输入至少5个字符的任务描述');
+      return;
+    }
+    setExecLoading(true);
+    setExecResult(null);
+    try {
+      const res = await teamService.execute(execTeam.id, desc.trim());
+      if (res.ok) {
+        setExecResult(res.result || '执行完成，无输出');
+        message.success('团队执行完成');
+        fetchData();
+      } else {
+        message.error(res.detail || '执行失败');
+      }
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '执行失败');
+    } finally {
+      setExecLoading(false);
+    }
+  };
+
+  const openExecModal = (team) => {
+    setExecTeam(team);
+    setExecResult(null);
+    execForm.resetFields();
+  };
+
+  const closeExecModal = () => {
+    setExecTeam(null);
+    setExecResult(null);
+    execForm.resetFields();
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -73,9 +114,14 @@ function TeamManager({ isMobile }) {
             style={{ marginBottom: 12 }}
             title={<Space><TeamOutlined />{team.name}</Space>}
             extra={
-              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(team.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
+              <Space>
+                <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} onClick={() => openExecModal(team)}>
+                  执行
+                </Button>
+                <Popconfirm title="确认删除？" onConfirm={() => handleDelete(team.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
             }
           >
             {team.description && <p style={{ color: '#666', fontSize: 12, marginBottom: 8 }}>{team.description}</p>}
@@ -123,6 +169,52 @@ function TeamManager({ isMobile }) {
             </Select>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={<Space><ThunderboltOutlined /> 执行团队任务 — {execTeam?.name}</Space>}
+        open={!!execTeam}
+        onCancel={closeExecModal}
+        footer={execResult ? (
+          <Button type="primary" onClick={closeExecModal}>关闭</Button>
+        ) : null}
+        width={isMobile ? '95%' : 640}
+        destroyOnClose
+      >
+        {!execResult && !execLoading && (
+          <div>
+            <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+              编排者 {execTeam?.orchestrator_entity_id} 会自动拆解任务并分发给成员并行执行。
+            </Paragraph>
+            <Form form={execForm} layout="vertical">
+              <Form.Item name="task_description" rules={[{ required: true, min: 5, message: '至少5个字符' }]}>
+                <TextArea rows={3} placeholder="描述要让团队执行的任务..." />
+              </Form.Item>
+            </Form>
+            <div style={{ textAlign: 'right' }}>
+              <Button onClick={closeExecModal} style={{ marginRight: 8 }}>取消</Button>
+              <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleExecute} loading={execLoading}>
+                开始执行
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {execLoading && (
+          <div style={{ textAlign: 'center', padding: '30px 0' }}>
+            <Spin size="large" />
+            <Paragraph type="secondary" style={{ marginTop: 16 }}>
+              编排者正在分析任务、分发给成员、等待结果...
+              <br />预计需要 30-120 秒
+            </Paragraph>
+          </div>
+        )}
+
+        {execResult && (
+          <div style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+            {execResult}
+          </div>
+        )}
       </Modal>
     </div>
   );

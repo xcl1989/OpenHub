@@ -202,9 +202,6 @@ export const smart_entity_task_wait = tool({
       }
       const taskId = parsed.task.task_id
       const status = parsed.task.status
-      if (status === "pending") {
-        return `任务已创建（${taskId}），但目标智能体未设置自动接受。任务正在等待对方手动接受。请稍后使用 smart_entity_task_wait 并传入 task_id=${taskId} 来等待结果。`
-      }
 
       const waitResult = await callAPI(
         `/smart-entity-tasks/${taskId}/wait`,
@@ -269,6 +266,67 @@ export const smart_entity_batch = tool({
       return `批量派发失败: ${result}`
     } catch {
       return `批量派发失败: ${result}`
+    }
+  },
+})
+
+export const smart_entity_auto_team = tool({
+  description:
+    "根据用户需求自动组建智能体团队。分析需求、拆解子任务、从可用智能体中匹配最合适的成员、创建团队。返回团队ID和成员分配详情。",
+  args: {
+    requirement: tool.schema
+      .string()
+      .describe("用户的需求描述，用于自动分析和匹配智能体组建团队"),
+  },
+  async execute(args, context) {
+    const result = await callAPI(
+      "/smart-entity-teams/auto-create-internal",
+      "POST",
+      { requirement: args.requirement },
+      context.directory,
+    )
+    try {
+      const parsed = JSON.parse(result)
+      if (parsed.ok) {
+        const team = parsed.team || {}
+        const assignments = parsed.assignments || []
+        const lines = assignments.map(
+          (a: Record<string, unknown>) =>
+            `- ${a.subtask} → ${a.entity_id}（${a.rationale}）`,
+        )
+        return `团队「${team.name}」已创建！\n- 团队ID: ${team.id}\n- 编排者: ${team.orchestrator_entity_id}\n- 是否永久: ${parsed.is_permanent ? "是" : "否（一次性）"}\n- 任务分配:\n${lines.join("\n")}`
+      }
+      return `自动组队失败: ${parsed.detail || result}`
+    } catch {
+      return `自动组队失败: ${result}`
+    }
+  },
+})
+
+export const smart_entity_team_execute = tool({
+  description:
+    "让一个已创建的智能体团队执行任务。编排者会自动拆解任务并分发给团队成员并行执行，最后汇总结果返回。参数: team_id(团队ID), task_description(任务描述)",
+  args: {
+    team_id: tool.schema.number().describe("团队ID"),
+    task_description: tool.schema
+      .string()
+      .describe("要执行的任务描述，包含具体要求和上下文"),
+  },
+  async execute(args, context) {
+    const result = await callAPI(
+      `/smart-entity-teams/${args.team_id}/execute-internal`,
+      "POST",
+      { task_description: args.task_description },
+      context.directory,
+    )
+    try {
+      const parsed = JSON.parse(result)
+      if (parsed.ok) {
+        return `团队「${parsed.team_name}」执行完成！\n\n${parsed.result || "无输出"}`
+      }
+      return `团队执行失败: ${parsed.detail || parsed.error || result}`
+    } catch {
+      return `团队执行失败: ${result}`
     }
   },
 })

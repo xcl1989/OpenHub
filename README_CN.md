@@ -24,7 +24,7 @@
 
 **定时任务** — 通过对话或 UI 创建 cron 定时任务。AI 自动设置调度、按时执行、结果通知用户。支持编辑、暂停、恢复和手动触发。
 
-**智能体协作** — 创建具有特定能力和协作配置的 AI 智能体，通过自然语言在智能体之间委派复杂任务。支持自动接受任务、跟踪执行状态、在任务中心查看格式化结果。支持智能体发现、任务生命周期管理（待处理 → 处理中 → 已完成）和基于角色的权限控制（委托人 / 被委托人 / 执行者）。
+**智能体协作与团队** — 创建具有特定能力和协作配置的 AI 智能体，通过自然语言在智能体之间委派任务。支持组建智能体团队处理复杂多步骤任务：自动组队（LLM 分析需求→拆解子任务→匹配智能体）、团队执行（编排者协调成员串行/并行调度）、完整任务生命周期追踪。
 
 **多渠道集成** — 将 AI 连接到聊天平台。当前支持飞书双向实时消息。每个渠道可独立配置默认模型。对话记录统一保存到 `conversation_messages` 表，与网页端共享历史。可扩展适配器架构，支持企业微信/钉钉接入。
 
@@ -46,13 +46,13 @@
                                     ├── USER.md            ├── USER.md
                                     └── (git 仓库)         └── (git 仓库)
 
- MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks
-         knowledge_bases · knowledge_sources
+ MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks · smart_entities · smart_entity_teams
+          knowledge_bases · knowledge_sources
 ```
 
 核心设计：后端代理所有请求到同一个 opencode 实例，通过 `?directory={workspace_path}` 隔离用户。每个工作空间拥有独立的技能、工具、记忆文件和 git 历史。
 
- 此外还支持：模型兜底链、定时任务（cron）、智能体协作、Agentic 知识库、多渠道集成、自学习引擎、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
+  此外还支持：模型兜底链、定时任务（cron）、智能体协作与团队、Agentic 知识库、多渠道集成、自学习引擎、SSE 流式响应、工具权限管理、文件浏览器、移动端适配、24+ 模块化技能包。
 
 ---
 
@@ -187,19 +187,21 @@
 
 ## 智能体协作
 
+### 单智能体委派
+
 ```
  用户创建智能体（agent），设置名称、描述和能力
-                    ↓
+                     ↓
  智能体注册协作配置（自动接受、超时时间、权限）
-                    ↓
+                     ↓
  用户通过对话委派任务："让 agent001 分析 2025 年收款情况"
-                    ↓
+                     ↓
  smart_entity_delegate 工具创建任务 → 存入 MySQL
-                    ↓
+                     ↓
  自动接受？→ 在目标工作空间创建会话 → 使用智能体上下文执行
-                    ↓
+                     ↓
  每 30 秒轮询会话直到 finish=stop → 保存结果
-                    ↓
+                     ↓
  任务中心显示：委托人 / 被委托人 / 执行者 / 带 markdown 的结果
 ```
 
@@ -210,10 +212,63 @@
 | **执行者** | 实际执行任务的智能体 |
 | **状态** | 待处理 → 已接受 → 处理中 → 已完成 / 失败 |
 
-- 智能体可根据协作配置自动接受任务
-- 任务执行在目标工作空间创建隔离会话，使用智能体记忆上下文
-- 结果支持 Markdown 表格和 GFM 语法格式化
-- 任务中心 UI 支持基于角色的筛选，完整展示任务生命周期
+### 智能体团队
+
+将多个智能体组成**团队**，协作解决复杂的多步骤任务。编排者智能体负责协调成员、分发子任务、汇总结果。
+
+```
+ 用户创建团队（手动）或通过自然语言触发自动组队
+                     ↓
+ 自动组队：LLM 分析需求 → 拆解为子任务
+                     ↓
+ 将子任务匹配到候选智能体（自己的 + 公开的）
+                     ↓
+ 创建团队：名称、描述、成员、编排者 prompt
+                     ↓
+ 用户点击"执行"→ 启动编排者会话（build agent）
+                     ↓
+ 编排者通过 smart_entity_delegate 工具向成员委派任务
+                     ↓
+ 串行协调：等待成员返回结果 → 传递给下一个成员
+                     ↓
+ 所有子任务完成 → 编排者汇总 → 返回最终结果
+```
+
+**自动组队** — 用自然语言描述需求（如"分析 2025 年销售数据并生成报告"），系统通过 LLM 分析需求、拆解子任务、匹配最佳智能体、自动组建团队。
+
+**手动组队** — 在团队管理 UI 中创建团队。选择成员、设置描述、配置编排者 prompt。团队可以是永久的（保存复用）或一次性的（执行后自动清理）。
+
+**团队执行流程：**
+
+| 步骤 | 操作 |
+|------|------|
+| 1 | 加载团队成员和协作配置 |
+| 2 | 检查自动接受已启用，必要时提升 `max_concurrent_tasks` |
+| 3 | 构建编排者 prompt（含成员列表和协调策略） |
+| 4 | 启动 opencode build agent 作为编排者 |
+| 5 | 编排者调用 `smart_entity_delegate` 分发子任务 |
+| 6 | 编排者调用 `smart_entity_task_wait` 收集结果 |
+| 7 | 汇总结果返回给用户 |
+
+**核心设计：**
+
+- 编排者仅能使用委派工具，不能自行执行任务
+- 每个成员在自己的隔离工作空间会话中执行
+- 成员的记忆上下文自动注入执行 prompt
+- 执行前自动同步工具文件到成员工作空间
+- 僵尸任务检测：长时间 processing 的任务自动超时，释放并发槽位
+
+### MCP 工具
+
+| 工具 | 说明 |
+|------|------|
+| `smart_entity_delegate` | 向智能体委派任务 |
+| `smart_entity_task_list` | 列出任务（按状态筛选） |
+| `smart_entity_task_action` | 接受 / 拒绝 / 取消任务 |
+| `smart_entity_task_wait` | 等待任务完成（自动启动排队中的任务） |
+| `smart_entity_batch` | 批量委派多个任务 |
+| `smart_entity_auto_team` | 从自然语言描述自动创建团队 |
+| `smart_entity_team_execute` | 通过编排者协调执行团队任务 |
 
 ---
 
@@ -258,6 +313,10 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 智能体管理 | 协作任务中心 | 跨会话记忆 |
 |:-:|:-:|:-:|
 | ![智能体](pic/smartentity.png) | ![协作任务](pic/collabotask.png) | ![记忆](pic/memory.png) |
+
+| 团队管理 | 自动组队 |
+|:-:|:-:|
+| ![团队](pic/team.png) | ![自动组队](pic/autoteam.png) |
 
 ---
 
@@ -355,7 +414,8 @@ OpenHub/
 │   └── tools/
 │       ├── memory.ts              # 跨会话记忆工具
 │       ├── knowledge.ts           # 知识库工具（search/list/info/save）
-│       └── scheduled-task.ts      # 定时任务工具
+│       ├── scheduled-task.ts      # 定时任务工具
+│       └── smart-entity.ts        # 智能体工具（delegate/wait/batch/team）
 ├── smart-query-backend/           # FastAPI 后端
 │   ├── app/
 │   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge, channels
@@ -369,7 +429,7 @@ OpenHub/
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ChannelSettingsPage, ...
+│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, SmartEntityManager, TeamManager, AutoTeamModal, ...
 │       └── services/api.js
 └── AGENTS.md
 ```

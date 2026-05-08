@@ -674,6 +674,41 @@ async def wait_smart_entity_task(
             "error_message": task.get("error_message"),
         }
 
+    if task["status"] in ("pending", "queued"):
+        to_entity = database.get_smart_entity(task["to_entity_id"])
+        if to_entity:
+            collab = to_entity.get("collaboration_config", {})
+            if isinstance(collab, str):
+                try:
+                    collab = json.loads(collab)
+                except (json.JSONDecodeError, TypeError):
+                    collab = {}
+            if collab.get("auto_accept_tasks"):
+                max_concurrent = collab.get("max_concurrent_tasks", 10)
+                active_cnt = _count_active_tasks(task["to_entity_id"])
+                if active_cnt < max_concurrent:
+                    database.update_smart_entity_task_status(task_id, "accepted")
+                    database.update_smart_entity_task_status(task_id, "processing")
+                    to_user = database.get_user_by_id(to_entity["owner_user_id"])
+                    workspace = to_user["workspace_path"] if to_user else ""
+                    if workspace:
+                        body = type("Body", (), {
+                            "task_description": task.get("task_description", ""),
+                            "input_data": json.loads(task["input_data"]) if isinstance(task.get("input_data"), str) and task.get("input_data") else (task.get("input_data") or {}),
+                        })()
+                        collab_cfg = collab
+                        from datetime import datetime as _dt, timedelta as _td
+                        expires_at = _dt.now() + _td(seconds=collab_cfg.get("timeout_seconds", 3600))
+                        try:
+                            await _create_and_execute_task(
+                                body, task.get("from_entity_id", ""),
+                                task["from_user_id"], to_entity,
+                                task["to_user_id"], task_id, collab_cfg, expires_at,
+                            )
+                        except Exception as e:
+                            _log.warning("[Wait] Auto-start failed for %s: %s", task_id, e)
+                    task = database.get_smart_entity_task(task_id)
+
     session_id = task.get("session_id")
     if not session_id:
         raise HTTPException(status_code=400, detail="任务尚未开始执行")
@@ -1062,3 +1097,140 @@ async def internal_get_skill_telemetry(
 
     telemetry = database.get_user_skill_telemetry(user_id)
     return {"ok": True, "data": telemetry}
+
+
+@router.post("/smart-entity-teams/auto-create-internal")
+async def auto_create_team_internal(
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    body = await request.json()
+    requirement = body.get("requirement", "")
+    if not requirement or len(requirement) < 5:
+        raise HTTPException(status_code=400, detail="需求描述至少5个字符")
+
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="未找到用户")
+
+    from app.api.smart_entity import _call_opencode_for_team_plan, _extract_json_from_text
+
+    my_entities = database.get_user_smart_entities(user_id)
+    discoverable = database.get_discoverable_smart_entities(user_id)
+    candidates = [e for e in my_entities if e.get("status") == "active"] + list(discoverable)
+
+    if not candidates:
+        return {"ok": False, "error": "没有可用的智能体"}
+
+    agent_summary = []
+    for e in candidates:
+        caps = e.get("capabilities", [])
+        if isinstance(caps, str):
+            try:
+                caps = json.loads(caps)
+            except (json.JSONDecodeError, TypeError):
+                caps = []
+        agent_summary.append({
+            "entity_id": e["entity_id"],
+            "name": e["name"],
+            "description": (e.get("description") or "")[:200],
+            "capabilities": caps,
+            "base_agent": e.get("base_agent", "build"),
+        })
+
+    prompt = f"""你是一个团队组建专家。请分析以下需求，完成团队组建任务。
+
+## 用户需求
+{requirement}
+
+## 可用智能体列表
+{json.dumps(agent_summary, ensure_ascii=False, indent=2)}
+
+## 任务
+1. 将用户需求拆解为子任务列表
+2. 为每个子任务从上述智能体中匹配最合适的一个（用 entity_id）
+3. 选择一个最适合做编排协调的智能体作为 orchestrator（优先选 base_agent 为 plan 的）
+4. 判断这个团队是否值得永久保存（通用的协作模式值得保存，特殊的一次性需求不保存）
+
+## 输出要求
+严格输出一个 JSON 对象，不要有任何其他文字。格式如下：
+{{
+  "team_name": "简洁的团队名称",
+  "team_description": "团队职责描述",
+  "is_permanent": true,
+  "orchestrator_entity_id": "选定的编排者entity_id",
+  "assignments": [
+    {{
+      "subtask": "子任务描述",
+      "entity_id": "匹配的智能体entity_id",
+      "rationale": "匹配理由（一句话）"
+    }}
+  ]
+}}"""
+
+    workspace = database.get_user_workspace(user_id)
+    if not workspace:
+        user = database.get_user_by_id(user_id)
+        workspace = user.get("workspace_path", "") if user else ""
+
+    try:
+        result_text = await _call_opencode_for_team_plan(workspace, prompt)
+    except Exception as e:
+        return {"ok": False, "error": f"LLM 调用失败: {str(e)}"}
+
+    parsed = _extract_json_from_text(result_text)
+    if not parsed or "assignments" not in parsed:
+        return {"ok": False, "error": f"无法解析结果: {result_text[:300]}"}
+
+    orchestrator_id = parsed.get("orchestrator_entity_id", "")
+    member_ids = list({a["entity_id"] for a in parsed.get("assignments", []) if a.get("entity_id") != orchestrator_id})
+    if orchestrator_id and orchestrator_id not in member_ids:
+        all_ids = [orchestrator_id] + member_ids
+    else:
+        all_ids = member_ids
+
+    if not all_ids:
+        return {"ok": False, "error": "匹配结果中没有有效的智能体"}
+
+    team = database.create_team(
+        name=parsed.get("team_name", "自动组建团队"),
+        owner_user_id=user_id,
+        orchestrator_entity_id=orchestrator_id or all_ids[0],
+        member_entity_ids=all_ids,
+        description=parsed.get("team_description", ""),
+        team_prompt=f"你是一个智能体团队的编排者。团队负责：{requirement}\n请根据成员能力合理分配和协调任务。",
+        routing_config={"assignments": parsed.get("assignments", []), "requirement": requirement},
+        is_permanent=parsed.get("is_permanent", True),
+    )
+
+    if not team:
+        return {"ok": False, "error": "团队创建失败"}
+
+    return {
+        "ok": True,
+        "team": team,
+        "assignments": parsed.get("assignments", []),
+        "is_permanent": parsed.get("is_permanent", True),
+    }
+
+
+@router.post("/smart-entity-teams/{team_id}/execute-internal")
+async def execute_team_internal(
+    team_id: int,
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    body = await request.json()
+    task_description = body.get("task_description", "")
+    if not task_description or len(task_description) < 5:
+        raise HTTPException(status_code=400, detail="任务描述至少5个字符")
+
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="未找到用户")
+
+    from app.api.smart_entity import _execute_team_core
+
+    return await _execute_team_core(team_id, user_id, task_description)

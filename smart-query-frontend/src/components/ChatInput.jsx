@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Input, Button, Image, Typography, Tooltip, Segmented, Select, Space, Tag, Drawer, Radio, List } from 'antd';
-import { LinkOutlined, SendOutlined, PlusOutlined, CloseOutlined, DownloadOutlined, RobotOutlined } from '@ant-design/icons';
+import { LinkOutlined, SendOutlined, PlusOutlined, CloseOutlined, DownloadOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { queryDataService } from '../services/api';
+import AutoTeamModal from './AutoTeamModal';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -307,6 +308,7 @@ export default function ChatInput({
   onToggleTodoPanel,
 }) {
   const [isMobile, setIsMobile] = useState(false);
+  const [autoTeamVisible, setAutoTeamVisible] = useState(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -394,6 +396,16 @@ export default function ChatInput({
           style={{ fontSize: 12, flexShrink: 0 }}
         />
         <ModelSelect model={model} setModel={setModel} agent={agent} />
+        <Tooltip title="自动组建智能体团队">
+          <Button
+            size="small"
+            icon={<ThunderboltOutlined />}
+            onClick={() => setAutoTeamVisible(true)}
+            style={{ fontSize: 11, flexShrink: 0 }}
+          >
+            {!isMobile && '组队'}
+          </Button>
+        </Tooltip>
         {model?.monthlyLimit !== undefined && (() => {
           const limit = model.monthlyLimit;
           const used = model.currentUsage || 0;
@@ -598,6 +610,11 @@ export default function ChatInput({
           </Button>
         </div>
       </div>
+      <AutoTeamModal
+        visible={autoTeamVisible}
+        onClose={() => setAutoTeamVisible(false)}
+        isMobile={isMobile}
+      />
     </div>
   );
 }

@@ -2,15 +2,19 @@
 智能体（Smart Entity）管理 API
 """
 import asyncio
+import json
+import logging
+import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user
 from app import database
+from app.config import config
 
 router = APIRouter()
 
@@ -250,8 +254,6 @@ async def test_entity_chat(
     """测试智能体 - 发送一条消息并返回完整回复"""
     from app.services.opencode_client import opencode_client
     from app.config import config
-    import json
-    import time
 
     entity = await asyncio.to_thread(database.get_smart_entity, entity_id)
     if not entity:
@@ -431,3 +433,311 @@ async def delete_team(team_id: int, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=403, detail="无权删除")
     await asyncio.to_thread(database.delete_team, team_id)
     return {"ok": True}
+
+
+class TeamAutoCreateRequest(BaseModel):
+    requirement: str = Field(..., min_length=5, description="用户需求描述")
+
+
+def _extract_json_from_text(text: str) -> dict | None:
+    candidates = re.findall(r'\{[\s\S]*\}', text)
+    for c in reversed(candidates):
+        try:
+            return json.loads(c)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
+async def _call_opencode_for_team_plan(workspace: str, prompt: str, timeout: float = 90, agent: str = "plan") -> str:
+    import httpx
+    from app.services.opencode_client import opencode_client
+    from app.services.stream import sync_tools_from_template
+
+    sync_tools_from_template(workspace)
+
+    client = await opencode_client.get_client()
+    resp = await client.post(
+        f"{config.OPENCODE_BASE_URL}/session",
+        params={"directory": workspace},
+        auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
+        json={},
+        timeout=10,
+    )
+    session_id = resp.json()["id"]
+
+    prompt_resp = await client.post(
+        f"{config.OPENCODE_BASE_URL}/session/{session_id}/prompt_async",
+        params={"directory": workspace},
+        auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
+        json={
+            "agent": agent,
+            "parts": [{"type": "text", "text": prompt}],
+        },
+        timeout=15,
+    )
+    if prompt_resp.status_code not in (200, 201, 204):
+        raise HTTPException(status_code=500, detail=f"opencode prompt failed: {prompt_resp.status_code}")
+
+    import asyncio as _aio
+    result_text = ""
+    deadline = _aio.get_event_loop().time() + timeout
+
+    async with httpx.AsyncClient(
+        transport=httpx.AsyncHTTPTransport(retries=3), timeout=timeout + 10
+    ) as sse_client:
+        async with sse_client.stream(
+            "GET",
+            f"{config.OPENCODE_BASE_URL}/global/event",
+            params={"directory": workspace},
+            auth=(config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD),
+            timeout=timeout + 10,
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if _aio.get_event_loop().time() > deadline:
+                    break
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    data = json.loads(line[6:])
+                    payload = data.get("payload", {})
+                    evt_type = payload.get("type", "")
+                    props = payload.get("properties", {})
+                    evt_session = (
+                        props.get("sessionID", "")
+                        or props.get("info", {}).get("sessionID", "")
+                        or props.get("part", {}).get("sessionID", "")
+                    )
+                    if evt_session != session_id:
+                        continue
+                    if evt_type == "message.part.delta":
+                        delta = props.get("delta", "")
+                        if delta:
+                            result_text += delta
+                    elif evt_type == "session.status":
+                        st = props.get("status", {})
+                        if st.get("type") == "idle":
+                            break
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+    return result_text
+
+
+@router.post("/api/smart-entity-teams/auto-create")
+async def auto_create_team(request: TeamAutoCreateRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    log = logging.getLogger(__name__)
+
+    my_entities = await asyncio.to_thread(database.get_user_smart_entities, user_id)
+    discoverable = await asyncio.to_thread(database.get_discoverable_smart_entities, user_id)
+    candidates = [e for e in my_entities if e.get("status") == "active"] + list(discoverable)
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail="没有可用的智能体，请先创建智能体")
+
+    agent_summary = []
+    for e in candidates:
+        caps = e.get("capabilities", [])
+        if isinstance(caps, str):
+            try:
+                caps = json.loads(caps)
+            except (json.JSONDecodeError, TypeError):
+                caps = []
+        agent_summary.append({
+            "entity_id": e["entity_id"],
+            "name": e["name"],
+            "description": (e.get("description") or "")[:200],
+            "capabilities": caps,
+            "base_agent": e.get("base_agent", "build"),
+        })
+
+    prompt = f"""你是一个团队组建专家。请分析以下需求，完成团队组建任务。
+
+## 用户需求
+{request.requirement}
+
+## 可用智能体列表
+{json.dumps(agent_summary, ensure_ascii=False, indent=2)}
+
+## 任务
+1. 将用户需求拆解为子任务列表
+2. 为每个子任务从上述智能体中匹配最合适的一个（用 entity_id）
+3. 选择一个最适合做编排协调的智能体作为 orchestrator（优先选 base_agent 为 plan 的）
+4. 判断这个团队是否值得永久保存（通用的协作模式值得保存，特殊的一次性需求不保存）
+
+## 输出要求
+严格输出一个 JSON 对象，不要有任何其他文字。格式如下：
+{{
+  "team_name": "简洁的团队名称",
+  "team_description": "团队职责描述",
+  "is_permanent": true,
+  "orchestrator_entity_id": "选定的编排者entity_id",
+  "assignments": [
+    {{
+      "subtask": "子任务描述",
+      "entity_id": "匹配的智能体entity_id",
+      "rationale": "匹配理由（一句话）"
+    }}
+  ]
+}}"""
+
+    workspace = database.get_user_workspace(user_id)
+    if not workspace:
+        workspace = database.get_user_by_id(user_id).get("workspace_path", "")
+
+    result_text = await _call_opencode_for_team_plan(workspace, prompt)
+
+    parsed = _extract_json_from_text(result_text)
+    if not parsed or "assignments" not in parsed:
+        log.warning("[AutoTeam] Failed to parse LLM output: %s", result_text[:500])
+        raise HTTPException(
+            status_code=422,
+            detail=f"无法解析团队组建结果，LLM 返回：{result_text[:500]}",
+        )
+
+    orchestrator_id = parsed.get("orchestrator_entity_id", "")
+    member_ids = list({a["entity_id"] for a in parsed.get("assignments", []) if a.get("entity_id") != orchestrator_id})
+    if orchestrator_id and orchestrator_id not in member_ids:
+        all_ids = [orchestrator_id] + member_ids
+    else:
+        all_ids = member_ids
+
+    if not all_ids:
+        raise HTTPException(status_code=422, detail="匹配结果中没有有效的智能体")
+
+    team = await asyncio.to_thread(
+        database.create_team,
+        name=parsed.get("team_name", "自动组建团队"),
+        owner_user_id=user_id,
+        orchestrator_entity_id=orchestrator_id or all_ids[0],
+        member_entity_ids=all_ids,
+        description=parsed.get("team_description", ""),
+        team_prompt=f"你是一个智能体团队的编排者。团队负责：{request.requirement}\n请根据成员能力合理分配和协调任务。",
+        routing_config={"assignments": parsed.get("assignments", []), "requirement": request.requirement},
+        is_permanent=parsed.get("is_permanent", True),
+    )
+
+    if not team:
+        raise HTTPException(status_code=500, detail="团队创建失败")
+
+    return {
+        "ok": True,
+        "team": team,
+        "assignments": parsed.get("assignments", []),
+        "is_permanent": parsed.get("is_permanent", True),
+        "llm_raw": result_text,
+    }
+
+
+class TeamExecuteRequest(BaseModel):
+    task_description: str = Field(..., min_length=5, description="任务描述")
+
+
+async def _execute_team_core(team_id: int, user_id: int, task_description: str) -> dict:
+    team = await asyncio.to_thread(database.get_team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="团队不存在")
+    if team["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="无权操作")
+    if team.get("status") != "active":
+        raise HTTPException(status_code=400, detail="团队未激活")
+
+    orchestrator_id = team["orchestrator_entity_id"]
+    member_ids = team.get("member_entity_ids", [])
+    if isinstance(member_ids, str):
+        member_ids = json.loads(member_ids)
+
+    routing = team.get("routing_config") or {}
+    if isinstance(routing, str):
+        routing = json.loads(routing)
+
+    all_entity_ids = list({orchestrator_id} | set(member_ids))
+    entity_map = {}
+    for eid in all_entity_ids:
+        e = await asyncio.to_thread(database.get_smart_entity, eid)
+        if e:
+            collab = e.get("collaboration_config", {})
+            if isinstance(collab, str):
+                try:
+                    collab = json.loads(collab)
+                except (json.JSONDecodeError, TypeError):
+                    collab = {}
+            if not collab.get("auto_accept_tasks") or (collab.get("max_concurrent_tasks") or 3) < 10:
+                collab["auto_accept_tasks"] = True
+                collab["max_concurrent_tasks"] = max(collab.get("max_concurrent_tasks") or 3, 10)
+                await asyncio.to_thread(
+                    database.update_smart_entity, eid, {"collaboration_config": collab}
+                )
+            caps = e.get("capabilities", [])
+            if isinstance(caps, str):
+                try:
+                    caps = json.loads(caps)
+                except (json.JSONDecodeError, TypeError):
+                    caps = []
+            entity_map[eid] = {
+                "entity_id": eid,
+                "name": e["name"],
+                "description": (e.get("description") or "")[:200],
+                "capabilities": caps,
+                "base_agent": e.get("base_agent", "build"),
+            }
+
+    members_summary = "\n".join(
+        f"- [{eid}] {info['name']}: {info['description']} | 能力: {', '.join(c.get('name', c.get('id', '')) for c in info['capabilities']) or '通用'}"
+        for eid, info in entity_map.items()
+        if eid != orchestrator_id
+    )
+
+    prev_assignments = ""
+    if routing.get("assignments"):
+        lines = [f"  - {a.get('subtask', '')} → {a.get('entity_id', '')} ({a.get('rationale', '')})" for a in routing["assignments"]]
+        prev_assignments = "\n## 之前的任务分配参考\n" + "\n".join(lines)
+
+    team_prompt = team.get("team_prompt") or "你是一个智能体团队的编排者。"
+
+    prompt = f"""{team_prompt}
+
+## ⚠️ 绝对规则（必须遵守）
+- 你是编排者，只负责协调，**绝对不能自己执行任何具体工作**
+- **禁止**使用 skill、task、bash、write、edit 等工具自己干活
+- **只能**使用以下工具与团队成员协作：
+  - `smart-entity_smart_entity_delegate` 或 `smart-entity_smart_entity_task_wait`: 向单个成员委派任务并等待结果
+  - `smart-entity_smart_entity_batch`: 向多个成员并行委派任务
+  - `smart-entity_smart_entity_task_list`: 查看任务状态
+
+## 你的团队成员
+{members_summary}
+{prev_assignments}
+
+## 用户任务
+{task_description}
+
+## 协调策略
+1. 分析用户任务，拆解为子任务，确定每个子任务由哪个成员负责
+2. **如果有依赖关系**（如 B 需要 A 的结果），必须串行执行：
+   - 先用 `smart-entity_smart_entity_task_wait` 委派给 A，等待 A 返回结果
+   - 再把 A 的结果作为 input_data 传给 B
+3. **如果子任务互相独立**，用 `smart-entity_smart_entity_batch` 并行委派
+4. 收集所有成员结果后，汇总整理为最终答案返回给用户
+
+现在请开始协调执行。"""
+
+    workspace = database.get_user_workspace(user_id)
+    if not workspace:
+        user = database.get_user_by_id(user_id)
+        workspace = user.get("workspace_path", "") if user else ""
+
+    result_text = await _call_opencode_for_team_plan(workspace, prompt, timeout=180, agent="build")
+
+    return {
+        "ok": True,
+        "team_id": team_id,
+        "team_name": team["name"],
+        "result": result_text,
+    }
+
+
+@router.post("/api/smart-entity-teams/{team_id}/execute")
+async def execute_team(team_id: int, request: TeamExecuteRequest, current_user: dict = Depends(get_current_user)):
+    return await _execute_team_core(team_id, current_user.get("id"), request.task_description)

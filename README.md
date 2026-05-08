@@ -24,7 +24,7 @@
 
 **Scheduled Tasks** — Create cron-based tasks via chat or UI. The AI sets up the schedule, executes tasks on time, and notifies users of results. Supports edit, pause, resume, and manual trigger.
 
-**Smart Entity Collaboration** — Create AI agents (smart entities) with specific capabilities and collaboration configs. Delegate complex tasks between entities via natural language. Auto-accept tasks, track execution status, and view formatted results in the Task Center. Supports entity discovery, task lifecycle management (pending → processing → completed), and role-based permissions (delegator / delegatee / executor).
+**Smart Entity Collaboration** — Create AI agents (smart entities) with specific capabilities and collaboration configs. Delegate tasks between entities, build agent teams for complex workflows, and coordinate multi-step execution with an orchestrator. Supports auto-team creation via LLM analysis, team execution with serial/parallel task dispatch, and full task lifecycle tracking.
 
 **Multi-Channel Integration** — Connect AI to chat platforms. Currently supports Feishu (飞书) with bidirectional real-time messaging. Each channel can configure its own default model. Conversations are recorded to the same `conversation_messages` table as web chats, providing a unified history view. Extensible adapter architecture for WeCom/ DingTalk.
 
@@ -46,13 +46,13 @@
                                       ├── USER.md            ├── USER.md
                                       └── (git repo)         └── (git repo)
 
- MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks
-         knowledge_bases · knowledge_sources
+ MySQL ─ users · sessions · messages · permissions · usage · git_snapshots · tasks · smart_entities · smart_entity_teams
+          knowledge_bases · knowledge_sources
 ```
 
 Key design: backend proxies all requests through one opencode instance, using `?directory={workspace_path}` to isolate users. Each workspace has its own skills, tools, memory files, and git history.
 
- Plus: model failover chains, scheduled tasks (cron), smart entity collaboration, agentic knowledge base, multi-channel integration, self-learning engine, SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
+ Plus: model failover chains, scheduled tasks (cron), smart entity collaboration & teams, agentic knowledge base, multi-channel integration, self-learning engine, SSE streaming, tool permissions, file browser, mobile-responsive UI, 24+ modular skills.
 
 ---
 
@@ -187,19 +187,21 @@ Knowledge is wrapped in `<context>` XML tags, separate from the user's actual qu
 
 ## Smart Entity Collaboration
 
+### Single-Entity Delegation
+
 ```
  User creates a smart entity (agent) with name, description, and capabilities
-                    ↓
+                     ↓
  Entity registers with collaboration config (auto-accept, timeout, permissions)
-                    ↓
+                     ↓
  User delegates task via chat: "Ask agent001 to analyze 2025 revenue"
-                    ↓
+                     ↓
  smart_entity_delegate tool creates task → stored in MySQL
-                    ↓
+                     ↓
  Auto-accept? → Spawn session in target workspace → Execute with entity's context
-                    ↓
+                     ↓
  Poll session every 30s until finish=stop → Save result
-                    ↓
+                     ↓
  Task Center shows: delegator / delegatee / executor / result with markdown
 ```
 
@@ -210,10 +212,63 @@ Knowledge is wrapped in `<context>` XML tags, separate from the user's actual qu
 | **Executor** | Smart entity that actually performs the work |
 | **Status** | pending → accepted → processing → completed / failed |
 
-- Entities can auto-accept tasks based on collaboration config
-- Task execution spawns isolated session with entity's memory context
-- Results formatted with markdown tables, support GFM syntax
-- Full task lifecycle visible in Task Center UI with role-based filtering
+### Agent Teams
+
+Group multiple agents into a **team** to solve complex, multi-step tasks. An orchestrator agent coordinates members, dispatches sub-tasks, and aggregates results.
+
+```
+ User creates a team (manual) or triggers auto-team via natural language
+                     ↓
+ Auto-team: LLM analyzes the requirement → breaks into sub-tasks
+                     ↓
+ Matches sub-tasks to candidate agents (own + public entities)
+                     ↓
+ Team created with: name, description, members, orchestrator prompt
+                     ↓
+ User clicks "Execute" → orchestrator session spawned (build agent)
+                     ↓
+ Orchestrator delegates to members via smart_entity_delegate tool
+                     ↓
+ Serial coordination: waits for member result → passes to next member
+                     ↓
+ All sub-tasks complete → orchestrator summarizes → final result
+```
+
+**Auto-Team Creation** — Describe what you need in natural language (e.g. "Analyze 2025 sales data and generate a report"). The system uses an LLM to analyze the requirement, decompose it into sub-tasks, match each to the best available agent, and assemble the team automatically.
+
+**Manual Team** — Create teams in the Team Manager UI. Pick members, set description, configure the orchestrator prompt. Teams can be permanent (saved for reuse) or one-time (discarded after execution).
+
+**Team Execution Flow:**
+
+| Step | Action |
+|------|--------|
+| 1 | Load team members + collaboration configs |
+| 2 | Verify auto-accept enabled, raise `max_concurrent_tasks` if needed |
+| 3 | Build orchestrator prompt with member list and coordination strategy |
+| 4 | Spawn opencode build agent as orchestrator |
+| 5 | Orchestrator calls `smart_entity_delegate` for each sub-task |
+| 6 | Orchestrator calls `smart_entity_task_wait` to collect results |
+| 7 | Final summary returned to user |
+
+**Key Design:**
+
+- Orchestrator is restricted to delegation tools only — cannot execute tasks itself
+- Each member executes in its own isolated workspace session
+- Member memory context is injected into execution prompts
+- Tool files auto-sync to member workspaces before execution
+- Zombie task detection: long-running `processing` tasks are timed out to free concurrency slots
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `smart_entity_delegate` | Delegate a task to a smart entity |
+| `smart_entity_task_list` | List tasks (filter by status) |
+| `smart_entity_task_action` | Accept / reject / cancel a task |
+| `smart_entity_task_wait` | Wait for task completion (auto-starts pending tasks) |
+| `smart_entity_batch` | Delegate multiple tasks in one call |
+| `smart_entity_auto_team` | Auto-create a team from natural language description |
+| `smart_entity_team_execute` | Execute a team task with orchestrator coordination |
 
 ---
 
@@ -258,6 +313,10 @@ Prerequisites: Python 3.10+, Node.js 18+, MySQL 5.7+, Redis, [opencode](https://
 | Smart Entity Management | Collaboration Tasks | Cross-session Memory |
 |:-:|:-:|:-:|
 | ![Smart Entity](pic/smartentity.png) | ![Collab Tasks](pic/collabotask.png) | ![Memory](pic/memory.png) |
+
+| Team Management | Auto Team |
+|:-:|:-:|
+| ![Team](pic/team.png) | ![Auto Team](pic/autoteam.png) |
 
 ---
 
@@ -355,7 +414,8 @@ OpenHub/
 │   └── tools/
 │       ├── memory.ts              # Cross-session memory tool
 │       ├── knowledge.ts           # Knowledge base tools (search/list/info/save)
-│       └── scheduled-task.ts      # Scheduled task tool
+│       ├── scheduled-task.ts      # Scheduled task tool
+│       └── smart-entity.ts        # Smart entity tools (delegate/wait/batch/team)
 ├── smart-query-backend/           # FastAPI backend
 │   ├── app/
 │   │   ├── api/                   # auth, query, admin, session, internal, knowledge, admin_knowledge, channels
@@ -369,7 +429,7 @@ OpenHub/
 ├── smart-query-frontend/          # React + Vite + Ant Design
 │   └── src/
 │       ├── pages/                 # LoginPage, SmartQueryPage, AdminPage
-│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, ChannelSettingsPage, ...
+│       ├── components/            # ChatInput, MemoryViewer, KnowledgeManager, GitTimeMachine, SmartEntityManager, TeamManager, AutoTeamModal, ...
 │       └── services/api.js
 └── AGENTS.md
 ```

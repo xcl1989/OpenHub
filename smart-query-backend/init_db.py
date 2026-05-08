@@ -596,6 +596,9 @@ def init_database():
             "ALTER TABLE smart_entities ADD COLUMN model_config JSON",
             "ALTER TABLE smart_entities ADD COLUMN knowledge_base_id INT",
             "ALTER TABLE smart_entity_tasks ADD COLUMN session_id VARCHAR(128)",
+            "ALTER TABLE smart_entity_teams ADD COLUMN team_prompt TEXT",
+            "ALTER TABLE smart_entity_teams ADD COLUMN routing_config JSON",
+            "ALTER TABLE smart_entity_teams ADD COLUMN is_permanent TINYINT DEFAULT 1",
         ]
         for sql in MIGRATIONS:
             try:
