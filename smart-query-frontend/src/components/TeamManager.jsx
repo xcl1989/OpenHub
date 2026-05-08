@@ -6,14 +6,13 @@ import { teamService, smartEntityService } from '../services/api';
 const { TextArea } = Input;
 const { Paragraph } = Typography;
 
-function TeamManager({ isMobile }) {
+function TeamManager({ isMobile, onExecutionStarted }) {
   const [teams, setTeams] = useState([]);
   const [myEntities, setMyEntities] = useState([]);
   const [loading, setLoading] = useState(false);
   const [createVisible, setCreateVisible] = useState(false);
   const [execTeam, setExecTeam] = useState(null);
   const [execLoading, setExecLoading] = useState(false);
-  const [execResult, setExecResult] = useState(null);
   const [form] = Form.useForm();
   const [execForm] = Form.useForm();
 
@@ -64,15 +63,17 @@ function TeamManager({ isMobile }) {
       return;
     }
     setExecLoading(true);
-    setExecResult(null);
     try {
       const res = await teamService.execute(execTeam.id, desc.trim());
-      if (res.ok) {
-        setExecResult(res.result || '执行完成，无输出');
-        message.success('团队执行完成');
+      if (res.ok && res.execution_id) {
+        message.success('团队执行已启动');
+        closeExecModal();
+        if (onExecutionStarted) {
+          onExecutionStarted(res.execution_id);
+        }
         fetchData();
       } else {
-        message.error(res.detail || '执行失败');
+        message.error(res.detail || '执行启动失败');
       }
     } catch (err) {
       message.error(err?.response?.data?.detail || '执行失败');
@@ -83,13 +84,11 @@ function TeamManager({ isMobile }) {
 
   const openExecModal = (team) => {
     setExecTeam(team);
-    setExecResult(null);
     execForm.resetFields();
   };
 
   const closeExecModal = () => {
     setExecTeam(null);
-    setExecResult(null);
     execForm.resetFields();
   };
 
@@ -175,46 +174,26 @@ function TeamManager({ isMobile }) {
         title={<Space><ThunderboltOutlined /> 执行团队任务 — {execTeam?.name}</Space>}
         open={!!execTeam}
         onCancel={closeExecModal}
-        footer={execResult ? (
-          <Button type="primary" onClick={closeExecModal}>关闭</Button>
-        ) : null}
+        footer={null}
         width={isMobile ? '95%' : 640}
         destroyOnClose
       >
-        {!execResult && !execLoading && (
-          <div>
-            <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              编排者 {execTeam?.orchestrator_entity_id} 会自动拆解任务并分发给成员并行执行。
-            </Paragraph>
-            <Form form={execForm} layout="vertical">
-              <Form.Item name="task_description" rules={[{ required: true, min: 5, message: '至少5个字符' }]}>
-                <TextArea rows={3} placeholder="描述要让团队执行的任务..." />
-              </Form.Item>
-            </Form>
-            <div style={{ textAlign: 'right' }}>
-              <Button onClick={closeExecModal} style={{ marginRight: 8 }}>取消</Button>
-              <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleExecute} loading={execLoading}>
-                开始执行
-              </Button>
-            </div>
+        <div>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            编排者 {execTeam?.orchestrator_entity_id} 会自动拆解任务并分发给成员执行。执行开始后可在「团队状态」中查看进度。
+          </Paragraph>
+          <Form form={execForm} layout="vertical">
+            <Form.Item name="task_description" rules={[{ required: true, min: 5, message: '至少5个字符' }]}>
+              <TextArea rows={3} placeholder="描述要让团队执行的任务..." />
+            </Form.Item>
+          </Form>
+          <div style={{ textAlign: 'right' }}>
+            <Button onClick={closeExecModal} style={{ marginRight: 8 }}>取消</Button>
+            <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleExecute} loading={execLoading}>
+              开始执行
+            </Button>
           </div>
-        )}
-
-        {execLoading && (
-          <div style={{ textAlign: 'center', padding: '30px 0' }}>
-            <Spin size="large" />
-            <Paragraph type="secondary" style={{ marginTop: 16 }}>
-              编排者正在分析任务、分发给成员、等待结果...
-              <br />预计需要 30-120 秒
-            </Paragraph>
-          </div>
-        )}
-
-        {execResult && (
-          <div style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
-            {execResult}
-          </div>
-        )}
+        </div>
       </Modal>
     </div>
   );

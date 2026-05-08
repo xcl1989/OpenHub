@@ -57,6 +57,7 @@ import KnowledgeManager from '../components/KnowledgeManager';
 import GitTimeMachine from '../components/GitTimeMachine';
 import SmartEntityManager from '../components/SmartEntityManager';
 import SmartEntityTaskCenter from '../components/SmartEntityTaskCenter';
+import TeamExecutionDrawer from '../components/TeamExecutionDrawer';
 import TodoFloatPanel from '../components/TodoFloatPanel';
 import { usePretextMeasure } from '../hooks/usePretextMeasure';
 import { PretextMessageItem, PretextBubbleWidth, useDynamicBubbleWidth } from '../components/PretextIntegration';
@@ -111,6 +112,8 @@ const SmartQueryPage = () => {
   const [knowledgeManagerVisible, setKnowledgeManagerVisible] = useState(false);
   const [smartEntityManagerVisible, setSmartEntityManagerVisible] = useState(false);
   const [smartEntityTaskCenterVisible, setSmartEntityTaskCenterVisible] = useState(false);
+  const [teamExecDrawerVisible, setTeamExecDrawerVisible] = useState(false);
+  const [teamExecFocusId, setTeamExecFocusId] = useState(null);
   const [timeMachineVisible, setTimeMachineVisible] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyHasMore, setHistoryHasMore] = useState(true);
@@ -1650,12 +1653,24 @@ const SmartQueryPage = () => {
         open={smartEntityManagerVisible}
         onClose={() => setSmartEntityManagerVisible(false)}
         isMobile={isMobile}
+        onExecutionStarted={(execId) => {
+          setSmartEntityManagerVisible(false);
+          setTeamExecFocusId(execId);
+          setTeamExecDrawerVisible(true);
+        }}
       />
 
       <SmartEntityTaskCenter
         open={smartEntityTaskCenterVisible}
         onClose={() => setSmartEntityTaskCenterVisible(false)}
         isMobile={isMobile}
+      />
+
+      <TeamExecutionDrawer
+        open={teamExecDrawerVisible}
+        onClose={() => setTeamExecDrawerVisible(false)}
+        isMobile={isMobile}
+        focusExecId={teamExecFocusId}
       />
 
       {/* 归档确认 Modal */}
@@ -1863,6 +1878,7 @@ const SmartQueryPage = () => {
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setHistoryDrawerVisible(true);
           }}
           size="small"
@@ -1878,6 +1894,7 @@ const SmartQueryPage = () => {
             setTaskManagerVisible(false);
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setFileManagerVisible(true);
           }}
           size="small"
@@ -1895,6 +1912,7 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setSkillManagerVisible(true);
           }}
           size="small"
@@ -1910,6 +1928,7 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setTaskManagerVisible(true);
           }}
           size="small"
@@ -1926,6 +1945,7 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setMemoryViewerVisible(true);
           }}
           size="small"
@@ -1942,6 +1962,7 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
             setMemoryViewerVisible(false);
+            setTeamExecDrawerVisible(false);
             setKnowledgeManagerVisible(true);
           }}
           size="small"
@@ -1960,6 +1981,7 @@ const SmartQueryPage = () => {
             setSmartEntityManagerVisible(false);
             setSmartEntityTaskCenterVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setTimeMachineVisible(true);
           }}
           size="small"
@@ -1979,6 +2001,7 @@ const SmartQueryPage = () => {
             setSmartEntityTaskCenterVisible(false);
             setSmartEntityManagerVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setSmartEntityManagerVisible(true);
           }}
           size="small"
@@ -1996,6 +2019,7 @@ const SmartQueryPage = () => {
             setTimeMachineVisible(false);
             setSmartEntityManagerVisible(false);
             setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(false);
             setSmartEntityTaskCenterVisible(true);
           }}
           size="small"
@@ -2003,6 +2027,24 @@ const SmartQueryPage = () => {
           title="协作任务"
         >
           <span className="toolbar-btn-text">协作任务</span>
+        </Button>
+        <Button
+          icon={<ThunderboltOutlined />}
+          onClick={() => {
+            setSkillManagerVisible(false);
+            setTaskManagerVisible(false);
+            setMemoryViewerVisible(false);
+            setTimeMachineVisible(false);
+            setSmartEntityManagerVisible(false);
+            setSmartEntityTaskCenterVisible(false);
+            setKnowledgeManagerVisible(false);
+            setTeamExecDrawerVisible(true);
+          }}
+          size="small"
+          type="text"
+          title="团队执行状态"
+        >
+          <span className="toolbar-btn-text">团队状态</span>
         </Button>
         <NotificationBell />
       </div>
@@ -2167,6 +2209,10 @@ const SmartQueryPage = () => {
           currentTodos={currentTodos}
           todoPanelVisible={todoPanelVisible}
           onToggleTodoPanel={() => setTodoPanelVisible((v) => !v)}
+          onExecutionStarted={(execId) => {
+            setTeamExecFocusId(execId);
+            setTeamExecDrawerVisible(true);
+          }}
         />
       </Card>
 

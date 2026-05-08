@@ -449,7 +449,7 @@ def _extract_json_from_text(text: str) -> dict | None:
     return None
 
 
-async def _call_opencode_for_team_plan(workspace: str, prompt: str, timeout: float = 90, agent: str = "plan") -> str:
+async def _call_opencode_for_team_plan(workspace: str, prompt: str, timeout: float = 90, agent: str = "plan") -> tuple[str, str]:
     import httpx
     from app.services.opencode_client import opencode_client
     from app.services.stream import sync_tools_from_template
@@ -521,7 +521,7 @@ async def _call_opencode_for_team_plan(workspace: str, prompt: str, timeout: flo
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-    return result_text
+    return result_text, session_id
 
 
 @router.post("/api/smart-entity-teams/auto-create")
@@ -586,7 +586,7 @@ async def auto_create_team(request: TeamAutoCreateRequest, current_user: dict = 
     if not workspace:
         workspace = database.get_user_by_id(user_id).get("workspace_path", "")
 
-    result_text = await _call_opencode_for_team_plan(workspace, prompt)
+    result_text, _ = await _call_opencode_for_team_plan(workspace, prompt)
 
     parsed = _extract_json_from_text(result_text)
     if not parsed or "assignments" not in parsed:
@@ -634,13 +634,19 @@ class TeamExecuteRequest(BaseModel):
     task_description: str = Field(..., min_length=5, description="任务描述")
 
 
-async def _execute_team_core(team_id: int, user_id: int, task_description: str) -> dict:
+async def _execute_team_core(team_id: int, user_id: int, task_description: str, execution_id: str = None) -> dict:
     team = await asyncio.to_thread(database.get_team, team_id)
     if not team:
+        if execution_id:
+            database.update_team_execution_status(execution_id, "failed", error_message="团队不存在")
         raise HTTPException(status_code=404, detail="团队不存在")
     if team["owner_user_id"] != user_id:
+        if execution_id:
+            database.update_team_execution_status(execution_id, "failed", error_message="无权操作")
         raise HTTPException(status_code=403, detail="无权操作")
     if team.get("status") != "active":
+        if execution_id:
+            database.update_team_execution_status(execution_id, "failed", error_message="团队未激活")
         raise HTTPException(status_code=400, detail="团队未激活")
 
     orchestrator_id = team["orchestrator_entity_id"]
@@ -696,6 +702,16 @@ async def _execute_team_core(team_id: int, user_id: int, task_description: str) 
 
     team_prompt = team.get("team_prompt") or "你是一个智能体团队的编排者。"
 
+    exec_info = ""
+    if execution_id:
+        exec_info = f"""
+## 执行追踪（必须遵守）
+- 当前执行的 execution_id = `{execution_id}`，team_id = `{team_id}`
+- 每次调用 smart-entity_smart_entity_delegate 或 smart-entity_smart_entity_task_wait 时，必须在 input_data 中包含:
+  - "execution_id": "{execution_id}"
+  - "team_id": {team_id}
+- 这些信息用于追踪每个成员任务属于哪次执行"""
+
     prompt = f"""{team_prompt}
 
 ## ⚠️ 绝对规则（必须遵守）
@@ -705,6 +721,7 @@ async def _execute_team_core(team_id: int, user_id: int, task_description: str) 
   - `smart-entity_smart_entity_delegate` 或 `smart-entity_smart_entity_task_wait`: 向单个成员委派任务并等待结果
   - `smart-entity_smart_entity_batch`: 向多个成员并行委派任务
   - `smart-entity_smart_entity_task_list`: 查看任务状态
+{exec_info}
 
 ## 你的团队成员
 {members_summary}
@@ -728,16 +745,81 @@ async def _execute_team_core(team_id: int, user_id: int, task_description: str) 
         user = database.get_user_by_id(user_id)
         workspace = user.get("workspace_path", "") if user else ""
 
-    result_text = await _call_opencode_for_team_plan(workspace, prompt, timeout=180, agent="build")
+    try:
+        result_text, orchestrator_session_id = await _call_opencode_for_team_plan(workspace, prompt, timeout=180, agent="build")
+    except Exception as ex:
+        if execution_id:
+            database.update_team_execution_status(execution_id, "failed", error_message=str(ex)[:500])
+        raise
+
+    if execution_id:
+        database.update_team_execution_status(execution_id, "completed", result=result_text, orchestrator_session_id=orchestrator_session_id)
 
     return {
         "ok": True,
         "team_id": team_id,
         "team_name": team["name"],
         "result": result_text,
+        "execution_id": execution_id,
     }
 
 
 @router.post("/api/smart-entity-teams/{team_id}/execute")
 async def execute_team(team_id: int, request: TeamExecuteRequest, current_user: dict = Depends(get_current_user)):
-    return await _execute_team_core(team_id, current_user.get("id"), request.task_description)
+    user_id = current_user.get("id")
+    exec_id = f"exec_{uuid.uuid4().hex[:16]}"
+
+    execution = database.create_team_execution(exec_id, team_id, user_id, request.task_description)
+    if not execution:
+        raise HTTPException(status_code=500, detail="创建执行记录失败")
+
+    import threading
+    t = threading.Thread(
+        target=_run_team_execution_sync,
+        args=(team_id, user_id, request.task_description, exec_id),
+        daemon=True,
+    )
+    t.start()
+
+    return {"ok": True, "execution_id": exec_id, "status": "running"}
+
+
+def _run_team_execution_sync(team_id: int, user_id: int, task_description: str, exec_id: str):
+    import asyncio as _aio
+    _loop = _aio.new_event_loop()
+    _aio.set_event_loop(_loop)
+    try:
+        _loop.run_until_complete(
+            _execute_team_core(team_id, user_id, task_description, exec_id)
+        )
+    except Exception as e:
+        logging.getLogger(__name__).error("[TeamExecution] exec %s failed: %s", exec_id, e)
+        database.update_team_execution_status(exec_id, "failed", error_message=str(e)[:500])
+    finally:
+        _loop.close()
+
+
+@router.get("/api/team-executions/{exec_id}")
+async def get_execution_status(exec_id: str, current_user: dict = Depends(get_current_user)):
+    execution = database.get_team_execution(exec_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    if execution["user_id"] != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="无权查看")
+
+    member_tasks = database.get_execution_member_tasks(exec_id)
+    return {"ok": True, "execution": execution, "members": member_tasks}
+
+
+@router.get("/api/team-executions")
+async def list_executions(
+    team_id: int = None,
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("id")
+    if team_id:
+        executions = database.list_team_executions(team_id, limit)
+    else:
+        executions = database.list_user_team_executions(user_id, limit)
+    return {"ok": True, "executions": executions}

@@ -312,6 +312,8 @@ class SmartEntityTaskCreateInternal(BaseModel):
     task_title: str = Field(..., max_length=200)
     task_description: str = Field(...)
     input_data: Optional[dict] = Field(default_factory=dict)
+    execution_id: Optional[str] = Field(default=None)
+    team_id: Optional[int] = Field(default=None)
 
 
 class SmartEntityBatchCreateInternal(BaseModel):
@@ -481,6 +483,18 @@ async def create_smart_entity_task_internal(
     timeout = collab_config.get("timeout_seconds", 3600)
     expires_at = datetime.now() + timedelta(seconds=timeout)
 
+    exec_id = body.execution_id
+    tid = body.team_id
+    if not exec_id and body.input_data:
+        exec_id = body.input_data.get("execution_id")
+    if not tid and body.input_data:
+        tid = body.input_data.get("team_id")
+    if not exec_id:
+        active_exec = database.get_active_execution_by_entity(from_entity_id)
+        if active_exec:
+            exec_id = active_exec.get("execution_id")
+            tid = active_exec.get("team_id")
+
     task = database.create_smart_entity_task(
         task_id=task_id,
         from_entity_id=from_entity_id,
@@ -492,6 +506,8 @@ async def create_smart_entity_task_internal(
         task_description=body.task_description,
         input_data=body.input_data,
         expires_at=expires_at,
+        execution_id=exec_id,
+        team_id=tid,
     )
     if not task:
         raise HTTPException(status_code=500, detail="创建任务失败")
@@ -556,6 +572,18 @@ async def create_smart_entity_batch_internal(
         timeout = collab_config.get("timeout_seconds", 3600)
         expires_at = datetime.now() + timedelta(seconds=timeout)
 
+        batch_exec_id = spec.get("execution_id")
+        batch_team_id = spec.get("team_id")
+        if not batch_exec_id and spec.get("input_data"):
+            batch_exec_id = spec["input_data"].get("execution_id")
+        if not batch_team_id and spec.get("input_data"):
+            batch_team_id = spec["input_data"].get("team_id")
+        if not batch_exec_id:
+            active_exec = database.get_active_execution_by_entity(from_entity_id)
+            if active_exec:
+                batch_exec_id = active_exec.get("execution_id")
+                batch_team_id = active_exec.get("team_id")
+
         database.create_smart_entity_task(
             task_id=task_id,
             from_entity_id=from_entity_id or to_eid,
@@ -567,6 +595,8 @@ async def create_smart_entity_batch_internal(
             task_description=spec.get("task_description", ""),
             input_data=spec.get("input_data"),
             expires_at=expires_at,
+            execution_id=batch_exec_id,
+            team_id=batch_team_id,
         )
 
         if collab_config.get("auto_accept_tasks"):
@@ -1233,4 +1263,4 @@ async def execute_team_internal(
 
     from app.api.smart_entity import _execute_team_core
 
-    return await _execute_team_core(team_id, user_id, task_description)
+    return await _execute_team_core(team_id, user_id, task_description, execution_id=None)

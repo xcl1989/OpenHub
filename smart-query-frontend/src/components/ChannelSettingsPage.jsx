@@ -205,15 +205,10 @@ export default function ChannelSettingsPage({ onClose, isAdmin }) {
   const handleEditModel = async () => {
     try {
       const values = await editForm.validateFields();
-      const newConfig = typeof editingChannel.config === 'string'
-        ? JSON.parse(editingChannel.config || '{}')
-        : { ...(editingChannel.config || {}) };
-
+      const newConfig = {};
       if (values.model) {
         const [providerID, modelID] = values.model.split('|', 2);
         newConfig.model = { providerID, modelID };
-      } else {
-        delete newConfig.model;
       }
 
       await channelService.updateChannel(editingChannel.id, { config: newConfig });

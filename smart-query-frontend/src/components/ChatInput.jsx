@@ -306,6 +306,7 @@ export default function ChatInput({
   currentTodos,
   todoPanelVisible,
   onToggleTodoPanel,
+  onExecutionStarted,
 }) {
   const [isMobile, setIsMobile] = useState(false);
   const [autoTeamVisible, setAutoTeamVisible] = useState(false);
@@ -614,6 +615,7 @@ export default function ChatInput({
         visible={autoTeamVisible}
         onClose={() => setAutoTeamVisible(false)}
         isMobile={isMobile}
+        onExecutionStarted={onExecutionStarted}
       />
     </div>
   );

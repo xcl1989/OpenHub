@@ -86,6 +86,8 @@ async def create_channel(
     if req.channel_type not in ("feishu", "wecom", "dingtalk"):
         raise HTTPException(status_code=400, detail="不支持的渠道类型")
 
+    _validate_channel_config(req.config, req.channel_type)
+
     channel_id = await asyncio.to_thread(
         database.create_channel,
         req.channel_type,
@@ -112,6 +114,12 @@ async def update_channel(
     if req.name:
         fields["name"] = req.name
     if req.config:
+        app_secret = req.config.get("app_secret", "")
+        if "****" in app_secret:
+            raise HTTPException(
+                status_code=400,
+                detail="app_secret 包含掩码字符，请从飞书开放平台获取完整的 App Secret",
+            )
         fields["config"] = req.config
     if req.status:
         fields["status"] = req.status
@@ -271,6 +279,16 @@ def verify_bind_code(code: str) -> int | None:
             pass
         return int(val)
     return None
+
+
+def _validate_channel_config(cfg: dict, channel_type: str):
+    if channel_type == "feishu":
+        app_secret = cfg.get("app_secret", "")
+        if "****" in app_secret:
+            raise HTTPException(
+                status_code=400,
+                detail="app_secret 包含掩码字符，请从飞书开放平台获取完整的 App Secret（不要从掩码显示的界面复制）",
+            )
 
 
 def _mask_config(cfg: dict) -> dict:

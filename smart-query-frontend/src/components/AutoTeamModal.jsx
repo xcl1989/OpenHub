@@ -6,13 +6,12 @@ import { teamService } from '../services/api';
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
-function AutoTeamModal({ visible, onClose, isMobile }) {
+function AutoTeamModal({ visible, onClose, isMobile, onExecutionStarted }) {
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [execLoading, setExecLoading] = useState(false);
-  const [execResult, setExecResult] = useState(null);
 
   const handleAutoCreate = async () => {
     if (!requirement.trim()) return;
@@ -38,7 +37,6 @@ function AutoTeamModal({ visible, onClose, isMobile }) {
     setLoading(false);
     setResult(null);
     setError('');
-    setExecResult(null);
     setExecLoading(false);
     onClose(result);
   };
@@ -50,14 +48,16 @@ function AutoTeamModal({ visible, onClose, isMobile }) {
       return;
     }
     setExecLoading(true);
-    setExecResult(null);
     try {
       const res = await teamService.execute(result.team.id, desc);
-      if (res.ok) {
-        setExecResult(res.result || '执行完成');
-        message.success('团队执行完成');
+      if (res.ok && res.execution_id) {
+        message.success('团队执行已启动');
+        handleClose();
+        if (onExecutionStarted) {
+          onExecutionStarted(res.execution_id);
+        }
       } else {
-        message.error(res.detail || '执行失败');
+        message.error(res.detail || '执行启动失败');
       }
     } catch (err) {
       message.error(err?.response?.data?.detail || '执行失败');
@@ -179,22 +179,12 @@ function AutoTeamModal({ visible, onClose, isMobile }) {
               <Tag color={result.is_permanent ? 'green' : 'orange'}>
                 {result.is_permanent ? '永久团队' : '一次性团队'}
               </Tag>
-              {!execResult && (
-                <Button icon={<ThunderboltOutlined />} loading={execLoading} onClick={handleExecute}>
-                  立即执行
-                </Button>
-              )}
+              <Button icon={<ThunderboltOutlined />} loading={execLoading} onClick={handleExecute}>
+                立即执行
+              </Button>
               <Button type="primary" onClick={handleClose}>完成</Button>
             </Space>
           </div>
-
-          {execResult && (
-            <Card size="small" title="执行结果" style={{ marginTop: 12 }}>
-              <div style={{ maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6 }}>
-                {execResult}
-              </div>
-            </Card>
-          )}
         </div>
       )}
     </Modal>

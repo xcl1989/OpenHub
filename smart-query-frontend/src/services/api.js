@@ -829,6 +829,14 @@ export const teamService = {
     const response = await apiClient.post(`/smart-entity-teams/${teamId}/execute`, { task_description: taskDescription });
     return response.data;
   },
+  getExecution: async (execId) => {
+    const response = await apiClient.get(`/team-executions/${execId}`);
+    return response.data;
+  },
+  listExecutions: async (params = {}) => {
+    const response = await apiClient.get('/team-executions', { params });
+    return response.data;
+  },
 };
 
 export const knowledgeService = {

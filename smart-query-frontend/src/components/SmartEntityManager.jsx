@@ -10,7 +10,7 @@ const { TextArea } = Input;
 const { Option } = Select;
 const { Panel } = Collapse;
 
-function SmartEntityManager({ open, onClose, isMobile }) {
+function SmartEntityManager({ open, onClose, isMobile, onExecutionStarted }) {
   const width = isMobile ? '100%' : 800;
   const [loading, setLoading] = useState(false);
   const [myEntities, setMyEntities] = useState([]);
@@ -300,7 +300,7 @@ function SmartEntityManager({ open, onClose, isMobile }) {
               )}
             </Panel>
             <Panel header={<Space><TeamOutlined />智能体团队</Space>} key="teams">
-              <TeamManager isMobile={isMobile} />
+              <TeamManager isMobile={isMobile} onExecutionStarted={onExecutionStarted} />
             </Panel>
           </Collapse>
         )}

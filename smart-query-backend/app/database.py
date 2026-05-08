@@ -2032,19 +2032,22 @@ def create_smart_entity_task(
     task_title: str,
     task_description: str,
     input_data: dict = None,
-    expires_at=None
+    expires_at=None,
+    execution_id: str = None,
+    team_id: int = None,
 ) -> dict:
-    """创建智能体协作任务"""
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """INSERT INTO smart_entity_tasks 
                        (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
-                        task_type, task_title, task_description, input_data, expires_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        task_type, task_title, task_description, input_data, expires_at,
+                        execution_id, team_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
-                     task_type, task_title, task_description, json.dumps(input_data or {}), expires_at)
+                     task_type, task_title, task_description, json.dumps(input_data or {}), expires_at,
+                     execution_id, team_id)
                 )
                 conn.commit()
                 return get_smart_entity_task(task_id)
@@ -2853,15 +2856,29 @@ def get_channel_by_id(channel_id: int) -> dict | None:
 
 def update_channel(channel_id: int, **fields) -> bool:
     try:
-        allowed = {"name", "config", "status"}
-        set_parts = []
-        values = []
-        for k, v in fields.items():
-            if k in allowed:
-                if k == "config" and isinstance(v, dict):
-                    v = json.dumps(v, ensure_ascii=False)
-                set_parts.append(f"{k} = %s")
-                values.append(v)
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                allowed = {"name", "config", "status"}
+                set_parts = []
+                values = []
+
+                for k, v in fields.items():
+                    if k not in allowed:
+                        continue
+                    if k == "config" and isinstance(v, dict):
+                        cursor.execute("SELECT config FROM channels WHERE id = %s", (channel_id,))
+                        row = cursor.fetchone()
+                        existing = {}
+                        if row and row.get("config"):
+                            ec = row["config"]
+                            try:
+                                existing = json.loads(ec) if isinstance(ec, str) else ec
+                            except (json.JSONDecodeError, TypeError):
+                                existing = {}
+                        existing.update(v)
+                        v = json.dumps(existing, ensure_ascii=False)
+                    set_parts.append(f"{k} = %s")
+                    values.append(v)
         if not set_parts:
             return False
         values.append(channel_id)
@@ -3215,3 +3232,133 @@ def get_channel_analytics(days: int = 30, channel_id: int | None = None) -> dict
         print(f"获取渠道分析数据失败: {e}")
         return {"by_channel": [], "daily": [], "active_bindings": 0,
                 "total_messages": 0, "total_failed": 0, "error_rate": 0, "days": days}
+
+
+def create_team_execution(exec_id: str, team_id: int, user_id: int,
+                          task_description: str, orchestrator_session_id: str = None) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO team_executions
+                       (id, team_id, user_id, task_description, orchestrator_session_id)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (exec_id, team_id, user_id, task_description, orchestrator_session_id)
+                )
+                conn.commit()
+                return get_team_execution(exec_id)
+    except Exception as e:
+        print(f"创建团队执行记录失败: {e}")
+        return None
+
+
+def get_team_execution(exec_id: str) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM team_executions WHERE id = %s", (exec_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取团队执行记录失败: {e}")
+        return None
+
+
+def list_team_executions(team_id: int, limit: int = 20) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM team_executions WHERE team_id = %s ORDER BY created_at DESC LIMIT %s",
+                    (team_id, limit)
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取团队执行列表失败: {e}")
+        return []
+
+
+def update_team_execution_status(exec_id: str, status: str,
+                                  result: str = None, error_message: str = None,
+                                  orchestrator_session_id: str = None) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                now = datetime.now()
+                if status in ("completed", "failed"):
+                    cursor.execute(
+                        """UPDATE team_executions
+                           SET status = %s, result = %s, error_message = %s, completed_at = %s,
+                               orchestrator_session_id = COALESCE(%s, orchestrator_session_id)
+                           WHERE id = %s""",
+                        (status, result, error_message, now, orchestrator_session_id, exec_id)
+                    )
+                elif orchestrator_session_id:
+                    cursor.execute(
+                        "UPDATE team_executions SET status = %s, orchestrator_session_id = %s WHERE id = %s",
+                        (status, orchestrator_session_id, exec_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE team_executions SET status = %s WHERE id = %s",
+                        (status, exec_id)
+                    )
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"更新团队执行状态失败: {e}")
+        return False
+
+
+def get_execution_member_tasks(exec_id: str) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT t.*, e.name as entity_name, e.description as entity_description
+                       FROM smart_entity_tasks t
+                       LEFT JOIN smart_entities e ON t.to_entity_id = e.entity_id
+                       WHERE t.execution_id = %s
+                       ORDER BY t.created_at ASC""",
+                    (exec_id,)
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取执行成员任务失败: {e}")
+        return []
+
+
+def list_user_team_executions(user_id: int, limit: int = 50) -> list:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT ex.*, tm.name as team_name
+                       FROM team_executions ex
+                       LEFT JOIN smart_entity_teams tm ON ex.team_id = tm.id
+                       WHERE ex.user_id = %s
+                       ORDER BY ex.created_at DESC LIMIT %s""",
+                    (user_id, limit)
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户团队执行列表失败: {e}")
+        return []
+
+
+def get_active_execution_by_entity(entity_id: str) -> dict:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT te.id as execution_id, te.team_id, tm.orchestrator_entity_id
+                       FROM team_executions te
+                       JOIN smart_entity_teams tm ON te.team_id = tm.id
+                       WHERE te.status = 'running'
+                         AND tm.orchestrator_entity_id = %s
+                       ORDER BY te.created_at DESC LIMIT 1""",
+                    (entity_id,)
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"查找活跃执行失败: {e}")
+        return None

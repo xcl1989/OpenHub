@@ -383,6 +383,24 @@ TABLES = {
             INDEX idx_owner (owner_user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "team_executions": """
+        CREATE TABLE IF NOT EXISTS team_executions (
+            id VARCHAR(64) PRIMARY KEY,
+            team_id INT NOT NULL,
+            user_id INT NOT NULL,
+            task_description TEXT,
+            status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+            orchestrator_session_id VARCHAR(128),
+            result TEXT,
+            error_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME,
+            FOREIGN KEY (team_id) REFERENCES smart_entity_teams(id) ON DELETE CASCADE,
+            INDEX idx_team (team_id),
+            INDEX idx_user (user_id),
+            INDEX idx_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "knowledge_bases": """
         CREATE TABLE IF NOT EXISTS knowledge_bases (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -599,6 +617,10 @@ def init_database():
             "ALTER TABLE smart_entity_teams ADD COLUMN team_prompt TEXT",
             "ALTER TABLE smart_entity_teams ADD COLUMN routing_config JSON",
             "ALTER TABLE smart_entity_teams ADD COLUMN is_permanent TINYINT DEFAULT 1",
+            "ALTER TABLE smart_entity_tasks ADD COLUMN execution_id VARCHAR(64) DEFAULT NULL",
+            "ALTER TABLE smart_entity_tasks ADD COLUMN team_id INT DEFAULT NULL",
+            "CREATE INDEX idx_task_execution ON smart_entity_tasks(execution_id)",
+            "CREATE INDEX idx_task_team ON smart_entity_tasks(team_id)",
         ]
         for sql in MIGRATIONS:
             try:
