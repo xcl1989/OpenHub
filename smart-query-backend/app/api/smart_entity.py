@@ -49,6 +49,13 @@ class EntityTestChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
 
 
+class TeamCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="")
+    orchestrator_entity_id: str = Field(..., description="编排者智能体ID")
+    member_entity_ids: list[str] = Field(..., min_length=1, description="成员智能体ID列表")
+
+
 def _entity_to_dict(entity: dict) -> dict:
     tools = database.get_entity_tool_permissions(entity["entity_id"])
     result = {}
@@ -367,3 +374,60 @@ async def test_entity_chat(
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/api/smart-entity-teams")
+async def create_team(request: TeamCreateRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    team = await asyncio.to_thread(
+        database.create_team,
+        name=request.name,
+        description=request.description,
+        owner_user_id=user_id,
+        orchestrator_entity_id=request.orchestrator_entity_id,
+        member_entity_ids=request.member_entity_ids,
+    )
+    if not team:
+        raise HTTPException(status_code=500, detail="创建团队失败")
+    return {"ok": True, "team": team}
+
+
+@router.get("/api/smart-entity-teams")
+async def list_teams(current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    teams = await asyncio.to_thread(database.get_user_teams, user_id)
+    return {"ok": True, "teams": teams}
+
+
+@router.get("/api/smart-entity-teams/{team_id}")
+async def get_team(team_id: int, current_user: dict = Depends(get_current_user)):
+    team = await asyncio.to_thread(database.get_team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="团队不存在")
+    return {"ok": True, "team": team}
+
+
+@router.put("/api/smart-entity-teams/{team_id}")
+async def update_team(team_id: int, request: dict, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    team = await asyncio.to_thread(database.get_team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="团队不存在")
+    if team["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="无权修改")
+    success = await asyncio.to_thread(database.update_team, team_id, request)
+    if not success:
+        raise HTTPException(status_code=500, detail="更新失败")
+    return {"ok": True}
+
+
+@router.delete("/api/smart-entity-teams/{team_id}")
+async def delete_team(team_id: int, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id")
+    team = await asyncio.to_thread(database.get_team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="团队不存在")
+    if team["owner_user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="无权删除")
+    await asyncio.to_thread(database.delete_team, team_id)
+    return {"ok": True}

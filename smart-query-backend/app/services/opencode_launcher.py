@@ -112,35 +112,34 @@ def stop_opencode() -> bool:
                 _opencode_process.kill()
                 _opencode_process.wait(timeout=5)
             _opencode_process = None
-            if not is_opencode_running():
-                return True
         except Exception:
             pass
 
-    pid = _find_opencode_listener_pid(4096)
-    if pid is None:
-        return False
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        _opencode_process = None
-        return False
-    except Exception:
-        _opencode_process = None
-        return False
-
-    for _ in range(10):
-        time.sleep(0.5)
-        if _find_opencode_listener_pid(4096) is None:
+    pids_killed = set()
+    for _ in range(3):
+        pid = _find_opencode_listener_pid(4096)
+        if pid is None:
             _opencode_process = None
             return True
-
-    try:
-        os.kill(pid, signal.SIGKILL)
+        if pid in pids_killed:
+            os.kill(pid, signal.SIGKILL)
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                _opencode_process = None
+                return True
+            except Exception:
+                pass
+            pids_killed.add(pid)
         time.sleep(1)
-    except Exception:
-        pass
+
+    for pid in pids_killed:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+    time.sleep(1)
 
     _opencode_process = None
     return not is_opencode_running()

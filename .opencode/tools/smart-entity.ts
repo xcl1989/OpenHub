@@ -167,3 +167,108 @@ export const smart_entity_task_action = tool({
     }
   },
 })
+
+export const smart_entity_task_wait = tool({
+  description:
+    "委托任务给智能体并阻塞等待结果返回。会等待目标智能体完成该任务，然后带回执行结果。当需要委托任务并立即获取结果时使用此工具。参数: to_entity_id(目标智能体ID), task_title(任务标题), task_description(任务描述), task_type(任务类型,可选), input_data(可选输入数据)",
+  args: {
+    to_entity_id: tool.schema.string().describe("目标智能体ID"),
+    task_title: tool.schema.string().describe("任务标题，简洁描述要做什么"),
+    task_description: tool.schema
+      .string()
+      .describe("详细的任务描述，包含具体要求和上下文"),
+    task_type: tool.schema
+      .string()
+      .optional()
+      .describe("任务类型: capability_request(能力请求), data_exchange(数据交换), review(审核), custom(自定义)"),
+    input_data: tool.schema
+      .object({})
+      .optional()
+      .describe("可选的输入数据，JSON对象格式"),
+  },
+  async execute(args, context) {
+    const body: Record<string, unknown> = {
+      to_entity_id: args.to_entity_id,
+      task_title: args.task_title,
+      task_description: args.task_description,
+    }
+    if (args.task_type) body.task_type = args.task_type
+    if (args.input_data) body.input_data = args.input_data
+    const createResult = await callAPI("/smart-entity-tasks", "POST", body, context.directory)
+    try {
+      const parsed = JSON.parse(createResult)
+      if (!parsed.ok || !parsed.task) {
+        return `创建任务失败: ${createResult}`
+      }
+      const taskId = parsed.task.task_id
+      const status = parsed.task.status
+      if (status === "pending") {
+        return `任务已创建（${taskId}），但目标智能体未设置自动接受。任务正在等待对方手动接受。请稍后使用 smart_entity_task_wait 并传入 task_id=${taskId} 来等待结果。`
+      }
+
+      const waitResult = await callAPI(
+        `/smart-entity-tasks/${taskId}/wait`,
+        "POST",
+        null,
+        context.directory,
+      )
+      const wp = JSON.parse(waitResult)
+      if (wp.ok) {
+        const out = wp.output_data || {}
+        const resultStr = out.result || wp.error_message || JSON.stringify(out)
+        return `任务 ${taskId} 已完成（状态: ${wp.status}）\n结果:\n${resultStr}`
+      }
+      return `等待任务结果失败: ${waitResult}`
+    } catch (e) {
+      return `执行失败: ${e}`
+    }
+  },
+})
+
+export const smart_entity_batch = tool({
+  description:
+    "批量派发多个任务到不同的智能体，并行执行。接收一个任务列表，每个任务指定目标智能体和任务描述，所有任务将同时开始执行。适用于需要多个智能体协作完成各自子任务的场景。参数: tasks(任务列表, 每项含 to_entity_id/task_title/task_description/task_type/input_data)",
+  args: {
+    tasks: tool.schema
+      .array(
+        tool.schema.object({
+          to_entity_id: tool.schema.string().describe("目标智能体ID"),
+          task_title: tool.schema.string().describe("任务标题"),
+          task_description: tool.schema.string().describe("任务描述"),
+          task_type: tool.schema.string().optional().describe("任务类型"),
+          input_data: tool.schema.object({}).optional().describe("输入数据"),
+        })
+      )
+      .describe("任务列表，每项包含 to_entity_id, task_title, task_description, 以及可选的 task_type 和 input_data"),
+  },
+  async execute(args, context) {
+    const body: Record<string, unknown> = {
+      tasks: args.tasks.map((t: Record<string, unknown>) => {
+        const item: Record<string, unknown> = {
+          to_entity_id: t.to_entity_id,
+          task_title: t.task_title,
+          task_description: t.task_description,
+        }
+        if (t.task_type) item.task_type = t.task_type
+        if (t.input_data) item.input_data = t.input_data
+        return item
+      }),
+    }
+    const result = await callAPI("/smart-entity-tasks/batch", "POST", body, context.directory)
+    try {
+      const parsed = JSON.parse(result)
+      if (parsed.ok) {
+        const lines = (parsed.results || []).map(
+          (r: Record<string, unknown>) => {
+            const status = r.status || r.error || "unknown"
+            return `- [${r.to_entity_id}] ${r.task_id || "N/A"}: ${status}`
+          },
+        )
+        return `已批量派发 ${(parsed.results || []).length} 个任务:\n${lines.join("\n")}`
+      }
+      return `批量派发失败: ${result}`
+    } catch {
+      return `批量派发失败: ${result}`
+    }
+  },
+})

@@ -1117,6 +1117,8 @@ def sync_tools_from_opencode() -> list:
         "smart_entity_delegate": ("custom", "向智能体委托任务"),
         "smart_entity_task_list": ("custom", "查看智能体任务列表"),
         "smart_entity_task_action": ("custom", "操作智能体任务（接受/拒绝/取消）"),
+        "smart_entity_task_wait": ("custom", "委托任务并等待结果"),
+        "smart_entity_batch": ("custom", "批量派发任务到多个智能体"),
         "knowledge_knowledge_search": ("safe", "搜索知识库"),
         "knowledge_knowledge_list": ("safe", "列出知识库内容"),
         "knowledge_knowledge_info": ("safe", "查看知识库概览"),
@@ -2262,6 +2264,103 @@ def set_entity_tool_permissions(entity_id: str, tool_names: list[str]) -> bool:
                 return True
     except Exception as e:
         print(f"设置智能体工具权限失败：{e}")
+        return False
+
+
+def create_team(
+    name: str,
+    owner_user_id: int,
+    orchestrator_entity_id: str,
+    member_entity_ids: list[str],
+    description: str = "",
+) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO smart_entity_teams
+                       (name, description, owner_user_id, orchestrator_entity_id, member_entity_ids)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (name, description, owner_user_id, orchestrator_entity_id, json.dumps(member_entity_ids)),
+                )
+                conn.commit()
+                return get_team(cursor.lastrowid)
+    except Exception as e:
+        print(f"创建团队失败：{e}")
+        return None
+
+
+def get_team(team_id: int) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM smart_entity_teams WHERE id = %s", (team_id,))
+                row = cursor.fetchone()
+                if row:
+                    result = dict(row)
+                    if isinstance(result.get("member_entity_ids"), str):
+                        result["member_entity_ids"] = json.loads(result["member_entity_ids"])
+                    return result
+        return None
+    except Exception as e:
+        print(f"获取团队失败：{e}")
+        return None
+
+
+def get_user_teams(user_id: int) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM smart_entity_teams WHERE owner_user_id = %s ORDER BY created_at DESC",
+                    (user_id,),
+                )
+                results = []
+                for row in cursor.fetchall():
+                    d = dict(row)
+                    if isinstance(d.get("member_entity_ids"), str):
+                        d["member_entity_ids"] = json.loads(d["member_entity_ids"])
+                    results.append(d)
+                return results
+    except Exception as e:
+        print(f"获取用户团队失败：{e}")
+        return []
+
+
+def update_team(team_id: int, updates: dict) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                allowed = ["name", "description", "orchestrator_entity_id", "member_entity_ids", "status"]
+                parts = []
+                params = []
+                for f in allowed:
+                    if f in updates:
+                        parts.append(f"{f} = %s")
+                        val = updates[f]
+                        if isinstance(val, list):
+                            val = json.dumps(val)
+                        params.append(val)
+                if not parts:
+                    return False
+                params.append(team_id)
+                cursor.execute(f"UPDATE smart_entity_teams SET {', '.join(parts)} WHERE id = %s", params)
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"更新团队失败：{e}")
+        return False
+
+
+def delete_team(team_id: int) -> bool:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM smart_entity_teams WHERE id = %s", (team_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+    except Exception as e:
+        print(f"删除团队失败：{e}")
         return False
 
 

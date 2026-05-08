@@ -314,6 +314,132 @@ class SmartEntityTaskCreateInternal(BaseModel):
     input_data: Optional[dict] = Field(default_factory=dict)
 
 
+class SmartEntityBatchCreateInternal(BaseModel):
+    tasks: list[dict] = Field(..., description="任务列表 [{to_entity_id, task_title, task_description, ...}]")
+
+
+def _count_active_tasks(entity_id: str) -> int:
+    try:
+        with database.get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM smart_entity_tasks WHERE to_entity_id = %s AND status IN ('accepted', 'processing')",
+                    (entity_id,)
+                )
+                row = cursor.fetchone()
+                return row["cnt"] if row else 0
+    except Exception:
+        return 0
+
+
+def _notify_task_update(task_id: str, status: str, user_id: int):
+    try:
+        from app.services.notif_stream import push_sync
+        task = database.get_smart_entity_task(task_id)
+        payload = {
+            "type": "entity_task_updated",
+            "task_id": task_id,
+            "status": status,
+            "title": (task or {}).get("task_title", ""),
+        }
+        push_sync(user_id, payload)
+    except Exception:
+        pass
+
+
+async def _create_and_execute_task(
+    body,
+    from_entity_id: str,
+    from_user_id: int,
+    to_entity: dict,
+    to_user_id: int,
+    task_id: str,
+    collab_config: dict,
+    expires_at,
+) -> dict | None:
+    import threading
+    import time
+
+    _log = logging.getLogger(__name__)
+    to_user = database.get_user_by_id(to_user_id)
+    workspace = to_user["workspace_path"] if to_user else ""
+
+    if workspace:
+        from app.services.stream import sync_tools_from_template
+        sync_tools_from_template(workspace)
+
+    prompt_text = (
+        f"你是智能体「{to_entity['name']}」。{to_entity.get('description', '')}\n"
+        f"请执行以下任务并给出结果：\n{body.task_description}"
+    )
+    if hasattr(body, 'input_data') and body.input_data:
+        prompt_text += f"\n\n输入数据：{json.dumps(body.input_data, ensure_ascii=False)}"
+    if isinstance(body, dict) and body.get("input_data"):
+        prompt_text += f"\n\n输入数据：{json.dumps(body['input_data'], ensure_ascii=False)}"
+
+    memory_ctx = await asyncio.to_thread(memory.build_memory_context, workspace)
+    if memory_ctx:
+        prompt_text = f"{memory_ctx}\n\n---\n\n{prompt_text}"
+
+    import httpx
+    auth = (config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD)
+    base = config.OPENCODE_BASE_URL
+    async with httpx.AsyncClient(
+        transport=httpx.AsyncHTTPTransport(retries=3), timeout=30
+    ) as client:
+        resp = await client.post(
+            f"{base}/session",
+            params={"directory": workspace},
+            auth=auth,
+            json={},
+            timeout=10,
+        )
+        session_id = resp.json()["id"]
+        _log.info("[SmartEntity] Session %s for task %s", session_id, task_id)
+
+        database.update_task_session_id(task_id, session_id)
+
+        prompt_body = {
+            "agent": to_entity.get("base_agent", "build"),
+            "parts": [{"type": "text", "text": prompt_text}],
+        }
+        primary_model = {"modelID": "", "providerID": ""}
+        from app.services.model_failover import build_failover_chain
+
+        chain = await build_failover_chain(primary_model)
+        for try_model in chain:
+            b = {**prompt_body}
+            if try_model.get("modelID"):
+                b["model"] = try_model
+            r = await client.post(
+                f"{base}/session/{session_id}/prompt_async",
+                params={"directory": workspace},
+                auth=auth,
+                json=b,
+                timeout=10,
+            )
+            if r.status_code in [200, 204]:
+                break
+
+    def _poll_in_thread():
+        import asyncio as _aio
+        _loop = _aio.new_event_loop()
+        _aio.set_event_loop(_loop)
+        try:
+            _loop.run_until_complete(
+                _poll_task_result(task_id, session_id, workspace, from_user_id)
+            )
+        except Exception as e:
+            _log.error("[SmartEntity] Poll thread failed: %s", e)
+        finally:
+            _loop.close()
+
+    t = threading.Thread(target=_poll_in_thread, daemon=True)
+    t.start()
+    _log.info("[SmartEntity] Poll thread for task %s session %s", task_id, session_id)
+    return None
+
+
 @router.post("/smart-entity-tasks")
 async def create_smart_entity_task_internal(
     body: SmartEntityTaskCreateInternal,
@@ -371,49 +497,119 @@ async def create_smart_entity_task_internal(
         raise HTTPException(status_code=500, detail="创建任务失败")
 
     if collab_config.get("auto_accept_tasks"):
+        max_concurrent = collab_config.get("max_concurrent_tasks", 3)
+        active_cnt = _count_active_tasks(body.to_entity_id)
+        if active_cnt >= max_concurrent:
+            database.update_smart_entity_task_status(
+                task_id, "pending", error_message=f"并发限制: {active_cnt}/{max_concurrent}"
+            )
+            return {"ok": True, "task": task, "queued": True}
+
         try:
+            database.update_smart_entity_task_status(task_id, "accepted")
+            database.update_smart_entity_task_status(task_id, "processing")
+            await _create_and_execute_task(
+                body, from_entity_id, user_id, to_entity,
+                to_entity["owner_user_id"], task_id, collab_config, expires_at
+            )
+        except Exception as ex:
+            import traceback
+            logging.getLogger(__name__).error(
+                "[SmartEntity] auto_accept failed task %s: %s\n%s",
+                task_id, ex, traceback.format_exc(),
+            )
+            database.update_smart_entity_task_status(
+                task_id, "failed", error_message=str(ex)[:500]
+            )
+
+    return {"ok": True, "task": task}
+
+
+@router.post("/smart-entity-tasks/batch")
+async def create_smart_entity_batch_internal(
+    body: SmartEntityBatchCreateInternal,
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    import uuid
+    from datetime import datetime, timedelta
+
+    directory = request.query_params.get("directory", "")
+    user_id = _get_user_id_from_directory(directory)
+    from_entity_id = request.query_params.get("from_entity_id", "")
+
+    _log = logging.getLogger(__name__)
+    results = []
+    tasks_created = []
+
+    for spec in body.tasks:
+        to_eid = spec.get("to_entity_id", "")
+        to_entity = database.get_smart_entity(to_eid)
+        if not to_entity:
+            results.append({"to_entity_id": to_eid, "error": "智能体不存在"})
+            continue
+
+        task_id = f"set_{uuid.uuid4().hex[:16]}"
+        collab_config = to_entity.get("collaboration_config", {})
+        if isinstance(collab_config, str):
+            collab_config = json.loads(collab_config)
+        timeout = collab_config.get("timeout_seconds", 3600)
+        expires_at = datetime.now() + timedelta(seconds=timeout)
+
+        database.create_smart_entity_task(
+            task_id=task_id,
+            from_entity_id=from_entity_id or to_eid,
+            from_user_id=user_id,
+            to_entity_id=to_eid,
+            to_user_id=to_entity["owner_user_id"],
+            task_type=spec.get("task_type", "custom"),
+            task_title=spec.get("task_title", ""),
+            task_description=spec.get("task_description", ""),
+            input_data=spec.get("input_data"),
+            expires_at=expires_at,
+        )
+
+        if collab_config.get("auto_accept_tasks"):
+            max_concurrent = collab_config.get("max_concurrent_tasks", 3)
+            active_cnt = _count_active_tasks(to_eid)
+            if active_cnt >= max_concurrent:
+                results.append({"task_id": task_id, "to_entity_id": to_eid, "status": "queued"})
+                continue
+
             database.update_smart_entity_task_status(task_id, "accepted")
             database.update_smart_entity_task_status(task_id, "processing")
 
             to_user = database.get_user_by_id(to_entity["owner_user_id"])
             workspace = to_user["workspace_path"] if to_user else ""
 
+            if workspace:
+                from app.services.stream import sync_tools_from_template
+                sync_tools_from_template(workspace)
+
             prompt_text = (
-                f"你是智能体「{to_entity['name']}」。{to_entity['description']}\n\n"
-                f"请执行以下任务并给出结果：\n{body.task_description}"
+                f"你是智能体「{to_entity['name']}」。{to_entity.get('description', '')}\n"
+                f"请执行以下任务并给出结果：\n{spec.get('task_description', '')}"
             )
-            if body.input_data:
-                prompt_text += (
-                    f"\n\n输入数据：{json.dumps(body.input_data, ensure_ascii=False)}"
-                )
+            if spec.get("input_data"):
+                prompt_text += f"\n\n输入数据：{json.dumps(spec['input_data'], ensure_ascii=False)}"
 
-            from app.services import memory as _memory
-
-            memory_ctx = await asyncio.to_thread(
-                _memory.build_memory_context, workspace
-            )
+            memory_ctx = await asyncio.to_thread(memory.build_memory_context, workspace)
             if memory_ctx:
                 prompt_text = f"{memory_ctx}\n\n---\n\n{prompt_text}"
 
             import httpx
-
             auth = (config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD)
             base = config.OPENCODE_BASE_URL
+
             async with httpx.AsyncClient(
                 transport=httpx.AsyncHTTPTransport(retries=3), timeout=30
             ) as client:
                 resp = await client.post(
                     f"{base}/session",
                     params={"directory": workspace},
-                    auth=auth,
-                    json={},
-                    timeout=10,
+                    auth=auth, json={}, timeout=10,
                 )
                 session_id = resp.json()["id"]
-                logging.getLogger(__name__).info(
-                    "[SmartEntity] Session %s created for task %s", session_id, task_id
-                )
-
                 database.update_task_session_id(task_id, session_id)
 
                 prompt_body = {
@@ -422,7 +618,6 @@ async def create_smart_entity_task_internal(
                 }
                 primary_model = {"modelID": "", "providerID": ""}
                 from app.services.model_failover import build_failover_chain
-
                 chain = await build_failover_chain(primary_model)
                 for try_model in chain:
                     b = {**prompt_body}
@@ -431,52 +626,128 @@ async def create_smart_entity_task_internal(
                     r = await client.post(
                         f"{base}/session/{session_id}/prompt_async",
                         params={"directory": workspace},
-                        auth=auth,
-                        json=b,
-                        timeout=10,
+                        auth=auth, json=b, timeout=10,
                     )
                     if r.status_code in [200, 204]:
                         break
 
-            import threading
+            tasks_created.append((task_id, session_id, workspace, user_id))
+            results.append({"task_id": task_id, "to_entity_id": to_eid, "status": "processing"})
+        else:
+            results.append({"task_id": task_id, "to_entity_id": to_eid, "status": "pending"})
 
-            def _poll_in_thread():
-                import asyncio as _aio
+    if tasks_created:
+        import threading
 
-                _loop = _aio.new_event_loop()
-                _aio.set_event_loop(_loop)
-                try:
-                    _loop.run_until_complete(
-                        _poll_task_result(task_id, session_id, workspace)
+        def _batch_poll():
+            import asyncio as _aio
+            _loop = _aio.new_event_loop()
+            _aio.set_event_loop(_loop)
+            try:
+                _loop.run_until_complete(_batch_wait_all(tasks_created))
+            except Exception as e:
+                _log.error("[SmartEntity] Batch poll failed: %s", e)
+            finally:
+                _loop.close()
+
+        t = threading.Thread(target=_batch_poll, daemon=True)
+        t.start()
+
+    return {"ok": True, "results": results}
+
+
+@router.post("/smart-entity-tasks/{task_id}/wait")
+async def wait_smart_entity_task(
+    task_id: str,
+    request: Request,
+    _auth=Depends(verify_internal_auth),
+):
+    task = database.get_smart_entity_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task["status"] in ("completed", "failed", "timeout", "rejected"):
+        return {
+            "ok": True,
+            "status": task["status"],
+            "output_data": json.loads(task["output_data"]) if isinstance(task["output_data"], str) and task["output_data"] else (task["output_data"] or {}),
+            "error_message": task.get("error_message"),
+        }
+
+    session_id = task.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="任务尚未开始执行")
+
+    directory = request.query_params.get("directory", "")
+
+    result_text = ""
+    import httpx
+    auth = (config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD)
+    base = config.OPENCODE_BASE_URL
+
+    async with httpx.AsyncClient(
+        transport=httpx.AsyncHTTPTransport(retries=3), timeout=120
+    ) as client:
+        try:
+            async with client.stream(
+                "GET",
+                f"{base}/global/event",
+                params={"directory": directory} if directory else None,
+                auth=auth,
+                timeout=120,
+            ) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=500, detail="无法监听事件")
+
+                task_done = False
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                        payload = data.get("payload", {})
+                        evt_type = payload.get("type", "")
+                        props = payload.get("properties", {})
+                        evt_session = (
+                            props.get("sessionID", "")
+                            or props.get("info", {}).get("sessionID", "")
+                            or props.get("part", {}).get("sessionID", "")
+                        )
+                        if evt_session != session_id:
+                            continue
+
+                        if evt_type == "message.part.delta":
+                            delta = props.get("delta", "")
+                            if delta:
+                                result_text += delta
+
+                        elif evt_type == "session.status":
+                            st = props.get("status", {})
+                            if st.get("type") == "idle":
+                                task_done = True
+                                break
+
+                    except json.JSONDecodeError:
+                        continue
+
+                if task_done and result_text:
+                    database.update_smart_entity_task_status(
+                        task_id, "completed",
+                        output_data={"result": result_text[:50000]}
                     )
-                except Exception as e:
-                    logging.getLogger(__name__).error(
-                        "[SmartEntity] Poll thread failed: %s", e
-                    )
-                finally:
-                    _loop.close()
+                    _notify_task_update(task_id, "completed", task.get("from_user_id", 0))
+                    return {"ok": True, "status": "completed", "output_data": {"result": result_text[:50000]}}
 
-            t = threading.Thread(target=_poll_in_thread, daemon=True)
-            t.start()
-            logging.getLogger(__name__).info(
-                "[SmartEntity] Started poll thread for task %s session %s",
-                task_id,
-                session_id,
-            )
-        except Exception as ex:
-            import traceback
+                raise HTTPException(status_code=500, detail="任务未产出结果")
 
-            logging.getLogger(__name__).error(
-                "[SmartEntity] auto_accept failed for task %s: %s\n%s",
-                task_id,
-                ex,
-                traceback.format_exc(),
-            )
+        except Exception as e:
+            if not result_text:
+                raise HTTPException(status_code=500, detail=str(e))
             database.update_smart_entity_task_status(
-                task_id, "failed", error_message=str(ex)[:500]
+                task_id, "completed",
+                output_data={"result": result_text[:50000]}
             )
-
-    return {"ok": True, "task": task}
+            return {"ok": True, "status": "completed", "output_data": {"result": result_text[:50000]}}
 
 
 @router.get("/smart-entity-tasks")
@@ -531,34 +802,27 @@ async def smart_entity_task_action_internal(
     raise HTTPException(status_code=400, detail=f"未知动作: {action}")
 
 
-async def _poll_task_result(task_id: str, session_id: str, workspace: str):
+async def _poll_task_result(task_id: str, session_id: str, workspace: str, notif_user_id: int = 0):
     import logging as _logging
-
     _log = _logging.getLogger(__name__)
 
     try:
         import httpx
-
         auth = (config.OPENCODE_USERNAME, config.OPENCODE_PASSWORD)
         base = config.OPENCODE_BASE_URL
         client = httpx.AsyncClient(
             transport=httpx.AsyncHTTPTransport(retries=3), timeout=30
         )
 
-        _log.info(
-            "[SmartEntity] Polling session %s for task %s every 30s...",
-            session_id,
-            task_id,
-        )
-        for attempt in range(60):
-            await asyncio.sleep(30)
-            _log.info("[SmartEntity] Poll attempt %d for task %s", attempt + 1, task_id)
+        _log.info("[SmartEntity] Polling session %s for task %s", session_id, task_id)
+        sleep_sec = 5
+        for attempt in range(180):
+            await asyncio.sleep(sleep_sec)
             try:
                 msgs_resp = await client.get(
                     f"{base}/session/{session_id}/message",
                     params={"directory": workspace},
-                    auth=auth,
-                    timeout=15,
+                    auth=auth, timeout=15,
                 )
                 messages = msgs_resp.json()
 
@@ -577,10 +841,12 @@ async def _poll_task_result(task_id: str, session_id: str, workspace: str):
                         last_assistant_text = "\n".join(parts_text)
                         break
 
-                if not last_assistant_text:
+                if last_assistant_text:
+                    sleep_sec = 10
+                else:
+                    sleep_sec = min(sleep_sec + 5, 30)
                     continue
 
-                # 只检查最后一条 assistant 消息的 finish 状态
                 last_assistant_finish = ""
                 for msg in reversed(messages):
                     info = msg.get("info", msg)
@@ -588,33 +854,28 @@ async def _poll_task_result(task_id: str, session_id: str, workspace: str):
                         last_assistant_finish = info.get("finish", "")
                         break
 
-                # 只有当 finish 明确为 "stop" 时才认为完成
                 is_completed = last_assistant_finish == "stop"
                 is_error = last_assistant_finish == "error"
 
                 if is_completed and last_assistant_text:
-                    _log.info(
-                        "[SmartEntity] Task %s completed, saving result (%d chars)",
-                        task_id,
-                        len(last_assistant_text),
-                    )
+                    _log.info("[SmartEntity] Task %s completed (%d chars)", task_id, len(last_assistant_text))
                     database.update_smart_entity_task_status(
-                        task_id,
-                        "completed",
-                        output_data={"result": last_assistant_text[:50000]},
+                        task_id, "completed",
+                        output_data={"result": last_assistant_text[:50000]}
                     )
+                    if notif_user_id:
+                        _notify_task_update(task_id, "completed", notif_user_id)
                     await client.aclose()
                     return
 
                 if is_error:
-                    _log.info("[SmartEntity] Task %s failed with error", task_id)
+                    _log.info("[SmartEntity] Task %s failed", task_id)
                     database.update_smart_entity_task_status(
-                        task_id,
-                        "failed",
-                        error_message=last_assistant_text[:500]
-                        if last_assistant_text
-                        else "执行出错",
+                        task_id, "failed",
+                        error_message=last_assistant_text[:500] if last_assistant_text else "执行出错"
                     )
+                    if notif_user_id:
+                        _notify_task_update(task_id, "failed", notif_user_id)
                     await client.aclose()
                     return
 
@@ -625,19 +886,35 @@ async def _poll_task_result(task_id: str, session_id: str, workspace: str):
         database.update_smart_entity_task_status(
             task_id, "failed", error_message="执行超时（30分钟）"
         )
+        if notif_user_id:
+            _notify_task_update(task_id, "failed", notif_user_id)
         await client.aclose()
     except Exception as e:
         import traceback
-
-        _log.error(
-            "[SmartEntity] Task %s poll failed: %s\n%s",
-            task_id,
-            e,
-            traceback.format_exc(),
-        )
+        _log.error("[SmartEntity] Task %s poll failed: %s\n%s", task_id, e, traceback.format_exc())
         database.update_smart_entity_task_status(
             task_id, "failed", error_message=str(e)[:500]
         )
+        if notif_user_id:
+            _notify_task_update(task_id, "failed", notif_user_id)
+
+
+async def _batch_wait_all(tasks: list[tuple]):
+    _log = logging.getLogger(__name__)
+    results = []
+    for task_id, session_id, workspace, user_id in tasks:
+        try:
+            await _poll_task_result(task_id, session_id, workspace, user_id)
+            task = database.get_smart_entity_task(task_id)
+            results.append({
+                "task_id": task_id,
+                "status": (task or {}).get("status", "unknown"),
+                "output": (task or {}).get("output_data"),
+            })
+        except Exception as e:
+            results.append({"task_id": task_id, "status": "error", "error": str(e)})
+    _log.info("[SmartEntity] Batch complete: %d tasks", len(results))
+    return results
 
 
 @router.get("/knowledge/search")

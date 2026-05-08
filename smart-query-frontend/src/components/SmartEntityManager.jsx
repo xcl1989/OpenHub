@@ -4,6 +4,7 @@ import { RobotOutlined, PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined,
 import { smartEntityService, adminService } from '../services/api';
 import EntityTestPanel from './EntityTestPanel';
 import EntityMetricsPanel from './EntityMetricsPanel';
+import TeamManager from './TeamManager';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -296,6 +297,9 @@ function SmartEntityManager({ open, onClose, isMobile }) {
               ) : (
                 discoverableEntities.map(e => renderEntityCard(e, false))
               )}
+            </Panel>
+            <Panel header={<Space><TeamOutlined />智能体团队</Space>} key="teams">
+              <TeamManager isMobile={isMobile} />
             </Panel>
           </Collapse>
         )}

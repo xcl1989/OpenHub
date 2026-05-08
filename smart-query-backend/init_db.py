@@ -292,6 +292,7 @@ TABLES = {
             started_at DATETIME,
             completed_at DATETIME,
             expires_at DATETIME,
+            session_id VARCHAR(128),
             FOREIGN KEY (from_entity_id) REFERENCES smart_entities(entity_id),
             FOREIGN KEY (to_entity_id) REFERENCES smart_entities(entity_id),
             INDEX idx_to_user_status (to_user_id, status),
@@ -364,6 +365,22 @@ TABLES = {
             action ENUM('deny', 'allow') DEFAULT 'allow',
             UNIQUE KEY idx_entity_tool (entity_id, tool_name),
             FOREIGN KEY (entity_id) REFERENCES smart_entities(entity_id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "smart_entity_teams": """
+        CREATE TABLE IF NOT EXISTS smart_entity_teams (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            owner_user_id INT NOT NULL,
+            orchestrator_entity_id VARCHAR(100) NOT NULL,
+            member_entity_ids JSON NOT NULL,
+            status ENUM('active', 'inactive') DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (orchestrator_entity_id) REFERENCES smart_entities(entity_id),
+            INDEX idx_owner (owner_user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "knowledge_bases": """
@@ -578,6 +595,7 @@ def init_database():
             "ALTER TABLE smart_entities ADD COLUMN system_prompt TEXT",
             "ALTER TABLE smart_entities ADD COLUMN model_config JSON",
             "ALTER TABLE smart_entities ADD COLUMN knowledge_base_id INT",
+            "ALTER TABLE smart_entity_tasks ADD COLUMN session_id VARCHAR(128)",
         ]
         for sql in MIGRATIONS:
             try:

@@ -27,6 +27,19 @@ _default_model_cache: Optional[dict] = None
 _cache_timestamp: float = 0
 _CACHE_TTL: float = 30.0
 
+_template_tools_dir = Path(__file__).parent.parent.parent.parent / ".opencode" / "tools"
+
+
+def sync_tools_from_template(workspace_path: str):
+    if not _template_tools_dir.is_dir():
+        return
+    target_dir = Path(workspace_path) / ".opencode" / "tools"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for src_file in _template_tools_dir.glob("*.ts"):
+        dst_file = target_dir / src_file.name
+        if not dst_file.exists() or src_file.stat().st_mtime > dst_file.stat().st_mtime:
+            shutil.copy2(src_file, dst_file)
+
 
 def sync_skill_permissions(workspace_path: str, user_id: int):
     try:
@@ -324,6 +337,7 @@ async def _background_collector(
                     )
 
             if user_id and workspace_path:
+                await asyncio.to_thread(sync_tools_from_template, workspace_path)
                 await asyncio.to_thread(sync_skill_permissions, workspace_path, user_id)
 
             prompt_response, actual_model = await try_prompt_with_failover(

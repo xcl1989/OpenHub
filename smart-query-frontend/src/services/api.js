@@ -804,6 +804,25 @@ export const smartEntityTaskService = {
   },
 };
 
+export const teamService = {
+  list: async () => {
+    const response = await apiClient.get('/smart-entity-teams');
+    return response.data;
+  },
+  create: async (data) => {
+    const response = await apiClient.post('/smart-entity-teams', data);
+    return response.data;
+  },
+  update: async (teamId, data) => {
+    const response = await apiClient.put(`/smart-entity-teams/${teamId}`, data);
+    return response.data;
+  },
+  delete: async (teamId) => {
+    const response = await apiClient.delete(`/smart-entity-teams/${teamId}`);
+    return response.data;
+  },
+};
+
 export const knowledgeService = {
   getBase: async () => {
     const response = await apiClient.get('/knowledge/base');
