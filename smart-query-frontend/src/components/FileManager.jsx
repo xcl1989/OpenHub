@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Drawer, Table, Button, Input, Space, Breadcrumb, Spin, message, Typography, Image, Empty } from 'antd';
+import { Drawer, Table, Button, Input, Space, Breadcrumb, Spin, message, Typography, Image, Empty, Segmented } from 'antd';
 import {
   FolderOutlined,
   FileOutlined,
@@ -9,8 +9,11 @@ import {
   SearchOutlined,
   ArrowLeftOutlined,
   CloseOutlined,
+  EyeOutlined,
+  CodeOutlined,
 } from '@ant-design/icons';
 import { fileService } from '../services/api';
+import MarkdownRenderer from './MarkdownRenderer';
 
 const { Text, Paragraph } = Typography;
 
@@ -50,6 +53,12 @@ function FileManager({ open, onClose }) {
   const [searching, setSearching] = useState(false);
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [showPreview, setShowPreview] = useState(false);
+  const [mdViewMode, setMdViewMode] = useState('preview');
+
+  const isMarkdownFile = (path) => {
+    if (!path) return false;
+    return /\.md$/i.test(path);
+  };
 
   useEffect(() => {
     const checkMobile = () => {
@@ -113,6 +122,7 @@ function FileManager({ open, onClose }) {
       const data = await fileService.getFileContent(record.path);
       setPreviewContent(data.content);
       setPreviewType('text');
+      setMdViewMode('preview');
       if (isMobile) setShowPreview(true);
     } catch (err) {
       if (err.response?.status === 413) {
@@ -237,38 +247,56 @@ function FileManager({ open, onClose }) {
   }, []);
 
   // Mobile preview view
-  const renderMobilePreview = () => (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ 
-        padding: '12px 16px', 
-        borderBottom: '1px solid #f0f0f0',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12
-      }}>
-        <Button
-          icon={<ArrowLeftOutlined />}
-          onClick={handleClosePreview}
-          size="small"
-        />
-        <Text ellipsis style={{ flex: 1, fontWeight: 500 }}>{previewPath.split('/').pop()}</Text>
-        <Button
-          size="small"
-          icon={<DownloadOutlined />}
-          onClick={() => window.open(fileService.getDownloadUrl(previewPath), '_blank')}
-        />
+  const renderMobilePreview = () => {
+    const isMd = isMarkdownFile(previewPath) && previewType === 'text';
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          padding: '12px 16px',
+          borderBottom: '1px solid #f0f0f0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12
+        }}>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={handleClosePreview}
+            size="small"
+          />
+          <Text ellipsis style={{ flex: 1, fontWeight: 500 }}>{previewPath.split('/').pop()}</Text>
+          {isMd && (
+            <Segmented
+              size="small"
+              value={mdViewMode}
+              onChange={setMdViewMode}
+              options={[
+                { value: 'preview', icon: <EyeOutlined /> },
+                { value: 'source', icon: <CodeOutlined /> },
+              ]}
+            />
+          )}
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            onClick={() => window.open(fileService.getDownloadUrl(previewPath), '_blank')}
+          />
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+          {previewLoading ? (
+            <Spin style={{ display: 'block', margin: '40px auto' }} />
+          ) : previewType === 'image' ? (
+            <Image src={previewContent} style={{ maxWidth: '100%' }} />
+          ) : isMd && mdViewMode === 'preview' ? (
+            <div style={{ background: '#fff', padding: 16, borderRadius: 8 }}>
+              <MarkdownRenderer content={previewContent} />
+            </div>
+          ) : (
+            <pre style={{...codeStyle, maxHeight: 'none', fontSize: 12}}>{previewContent}</pre>
+          )}
+        </div>
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
-        {previewLoading ? (
-          <Spin style={{ display: 'block', margin: '40px auto' }} />
-        ) : previewType === 'image' ? (
-          <Image src={previewContent} style={{ maxWidth: '100%' }} />
-        ) : (
-          <pre style={{...codeStyle, maxHeight: 'none', fontSize: 12}}>{previewContent}</pre>
-        )}
-      </div>
-    </div>
-  );
+    );
+  };
 
   // Mobile file list view
   const renderMobileFileList = () => (
@@ -432,8 +460,19 @@ function FileManager({ open, onClose }) {
             {previewContent !== null && (
               <div style={{ width: 340, overflow: 'auto', padding: 12 }}>
                 <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text ellipsis style={{ maxWidth: 200 }}>{previewPath.split('/').pop()}</Text>
+                  <Text ellipsis style={{ maxWidth: 160 }}>{previewPath.split('/').pop()}</Text>
                   <Space>
+                    {isMarkdownFile(previewPath) && previewType === 'text' && (
+                      <Segmented
+                        size="small"
+                        value={mdViewMode}
+                        onChange={setMdViewMode}
+                        options={[
+                          { value: 'preview', icon: <EyeOutlined /> },
+                          { value: 'source', icon: <CodeOutlined /> },
+                        ]}
+                      />
+                    )}
                     <Text type="secondary" style={{ fontSize: 11 }}>
                       {previewType === 'text' && typeof previewContent === 'string' ? formatSize(previewContent) : ''}
                     </Text>
@@ -448,6 +487,10 @@ function FileManager({ open, onClose }) {
                   <Spin />
                 ) : previewType === 'image' ? (
                   <Image src={previewContent} style={{ maxWidth: '100%' }} />
+                ) : isMarkdownFile(previewPath) && mdViewMode === 'preview' ? (
+                  <div style={{ background: '#fff', padding: 16, borderRadius: 8, maxHeight: '70vh', overflow: 'auto' }}>
+                    <MarkdownRenderer content={previewContent} />
+                  </div>
                 ) : (
                   <pre style={codeStyle}>{previewContent}</pre>
                 )}

@@ -2,11 +2,11 @@ import os
 import urllib.parse
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import Response
 from typing import Optional
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, validate_token
 from app.services.opencode_client import opencode_client
 from app.config import config
 from app.database import get_user_workspace
@@ -202,9 +202,27 @@ async def get_file_content(
 @router.get("/api/files/download")
 async def download_file(
     path: str,
-    current_user: dict = Depends(get_current_user),
+    token: str = "",
+    request: Request = None,
 ):
-    workspace = get_user_workspace(current_user.get("id"))
+    user = None
+    auth_header = request.headers.get("authorization", "") if request else ""
+    if auth_header.startswith("Bearer "):
+        try:
+            user = validate_token(auth_header[7:])
+        except Exception:
+            pass
+
+    if not user and token:
+        try:
+            user = validate_token(token)
+        except Exception:
+            pass
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    workspace = get_user_workspace(user.get("id"))
     if not workspace:
         raise HTTPException(status_code=400, detail="用户工作空间未配置")
 
