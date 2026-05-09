@@ -260,7 +260,7 @@ async def _process_channel_query(
         wait_interval = 60.0
 
         CARD_ELEMENT_ID = "content_md"
-        CARD_UPDATE_INTERVAL = 0.2
+        CARD_UPDATE_INTERVAL = 0.1
 
         streaming_card_id = ""
         streaming_enabled = False
