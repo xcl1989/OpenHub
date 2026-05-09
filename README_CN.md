@@ -35,8 +35,8 @@
                                ├── MEMORY.md          ├── MEMORY.md
                                └── (git 仓库)         └── (git 仓库)
 
- MySQL ─ users · sessions · messages · permissions · smart_entities · smart_entity_teams
-          knowledge_bases · git_snapshots · tasks · channels
+ SQLite ─ ─ users · sessions · messages · permissions · smart_entities · smart_entity_teams
+         knowledge_bases · git_snapshots · tasks · channels
 ```
 
 ---
@@ -50,7 +50,7 @@
 ```
  "让 agent001 分析 2025 年收款情况"
          ↓
- smart_entity_delegate → 任务存入 MySQL
+ smart_entity_delegate → 任务存入 SQLite
          ↓
  自动接受 → 在目标工作空间创建隔离会话 → 使用智能体记忆上下文执行
          ↓
@@ -152,7 +152,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 访问：**http://localhost:8000** · API 文档：http://localhost:8000/docs
 
-前置要求：Python 3.10+、Node.js 18+、MySQL 5.7+、Redis、[opencode](https://opencode.ai) 1.4+
+前置要求：Python 3.10+、Node.js 18+、Redis、[opencode](https://opencode.ai) 1.4+
 
 ---
 
@@ -187,7 +187,7 @@ OpenHub/
 **后端**（`smart-query-backend/.env`）：
 
 ```bash
-DB_HOST=127.0.0.1  DB_USER=root  DB_PASSWORD=***  DB_NAME=ANALYSE
+SQLITE_DB_PATH=data/openhub.db
 OPENCODE_BASE_URL=http://127.0.0.1:4096
 JWT_SECRET_KEY=***  INTERNAL_API_SECRET=***
 REDIS_HOST=localhost  REDIS_PORT=6379
