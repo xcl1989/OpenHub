@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user, validate_token
@@ -310,25 +310,21 @@ async def get_tasks(current_user: dict = Depends(get_current_user)):
 @router.put("/api/tasks/{task_id}")
 async def update_task(
     task_id: int,
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    from pydantic import BaseModel
-    from typing import Optional
-
-    class TaskUpdateRequest(BaseModel):
-        name: Optional[str] = None
-        question: Optional[str] = None
-        cron_expression: Optional[str] = None
-
-    from fastapi import Body
-
-    body: TaskUpdateRequest = Body(...)
-
+    body = await request.json()
     task = database.get_task(task_id)
     if not task or task["user_id"] != current_user["id"]:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    allowed = {"name", "question", "cron_expression", "notify_channel_id"}
+    fields = {}
+    for k, v in body.items():
+        if k in allowed and v is not None:
+            fields[k] = v
+        elif k == "notify_channel_id":
+            fields[k] = None
     if not fields:
         return {"ok": True, "task": task}
 

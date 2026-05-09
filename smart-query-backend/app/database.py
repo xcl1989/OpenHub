@@ -2987,6 +2987,38 @@ def get_channel_binding_by_external(channel_id: int, external_user_id: str) -> d
         return None
 
 
+def get_user_channel_binding(user_id: int, channel_id: int) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM channel_bindings WHERE user_id = %s AND channel_id = %s",
+                    (user_id, channel_id),
+                )
+                return cursor.fetchone()
+    except Exception as e:
+        print(f"获取用户渠道绑定失败: {e}")
+        return None
+
+
+def get_user_channel_bindings_with_channel(user_id: int) -> list[dict]:
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """SELECT cb.*, c.channel_type, c.name as channel_name, c.config as channel_config
+                       FROM channel_bindings cb
+                       JOIN channels c ON cb.channel_id = c.id
+                       WHERE cb.user_id = %s AND c.status = 'active'
+                       ORDER BY cb.last_active_at DESC""",
+                    (user_id,),
+                )
+                return cursor.fetchall()
+    except Exception as e:
+        print(f"获取用户渠道绑定(含渠道)失败: {e}")
+        return []
+
+
 def get_channel_bindings(user_id: int | None = None) -> list[dict]:
     try:
         with get_db_connection() as conn:

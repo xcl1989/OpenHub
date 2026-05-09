@@ -621,6 +621,7 @@ def init_database():
             "ALTER TABLE smart_entity_tasks ADD COLUMN team_id INT DEFAULT NULL",
             "CREATE INDEX idx_task_execution ON smart_entity_tasks(execution_id)",
             "CREATE INDEX idx_task_team ON smart_entity_tasks(team_id)",
+            "ALTER TABLE scheduled_tasks ADD COLUMN notify_channel_id INT DEFAULT NULL",
         ]
         for sql in MIGRATIONS:
             try:

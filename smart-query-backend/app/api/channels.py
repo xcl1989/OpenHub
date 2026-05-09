@@ -188,6 +188,31 @@ async def list_bindings(
     return {"success": True, "data": bindings}
 
 
+@router.get("/api/channels/user-bindings")
+async def get_user_bindings_with_channel(
+    current_user: dict = Depends(get_current_user),
+):
+    bindings = await asyncio.to_thread(
+        database.get_user_channel_bindings_with_channel, current_user["id"]
+    )
+    result = []
+    for b in bindings:
+        ch_config = b.get("channel_config", {})
+        if isinstance(ch_config, str):
+            try:
+                ch_config = json.loads(ch_config)
+            except Exception:
+                ch_config = {}
+        result.append({
+            "channel_id": b["channel_id"],
+            "channel_name": b.get("channel_name", ""),
+            "channel_type": b.get("channel_type", ""),
+            "binding_id": b["id"],
+            "has_chat_id": bool(b.get("external_chat_id")),
+        })
+    return {"success": True, "data": result}
+
+
 class AdminBindRequest(BaseModel):
     external_user_id: str = Field(..., description="飞书用户 open_id")
     user_id: int = Field(..., description="系统用户 ID")

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Drawer, Table, Switch, Tag, Spin, message, Card, Space, Input, Button, Form, Popconfirm } from 'antd';
-import { ClockCircleOutlined, PlayCircleOutlined, EditOutlined, CloseOutlined, CheckOutlined } from '@ant-design/icons';
-import { taskService } from '../services/api';
+import { Drawer, Table, Switch, Tag, Spin, message, Card, Space, Input, Button, Form, Select, Popconfirm } from 'antd';
+import { ClockCircleOutlined, PlayCircleOutlined, EditOutlined, CloseOutlined, CheckOutlined, BellOutlined } from '@ant-design/icons';
+import { taskService, channelService } from '../services/api';
 
 function TaskManager({ open, onClose, isMobile }) {
   const width = isMobile ? '100%' : 720;
@@ -12,12 +12,23 @@ function TaskManager({ open, onClose, isMobile }) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [runningTaskId, setRunningTaskId] = useState(null);
+  const [userChannels, setUserChannels] = useState([]);
 
   useEffect(() => {
     if (open) {
       fetchTasks();
+      fetchUserChannels();
     }
   }, [open]);
+
+  const fetchUserChannels = async () => {
+    try {
+      const result = await channelService.getUserBindingsWithChannel();
+      if (result.success) {
+        setUserChannels(result.data || []);
+      }
+    } catch {}
+  };
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -75,6 +86,7 @@ function TaskManager({ open, onClose, isMobile }) {
         name: task.name,
         question: task.question,
         cron_expression: task.cron_expression,
+        notify_channel_id: task.notify_channel_id,
       });
     }
   };
@@ -136,6 +148,13 @@ function TaskManager({ open, onClose, isMobile }) {
       key: 'cron_expression',
       width: 130,
       render: (cron) => <Tag color="blue">{cron}</Tag>,
+    },
+    {
+      title: '通知',
+      dataIndex: 'notify_channel_id',
+      key: 'notify_channel_id',
+      width: 70,
+      render: (channelId) => channelId ? <BellOutlined style={{ color: '#1890ff' }} /> : <span style={{ color: '#ccc' }}>-</span>,
     },
     {
       title: '状态',
@@ -206,6 +225,28 @@ function TaskManager({ open, onClose, isMobile }) {
                 <Input placeholder="0 9 * * *" style={{ width: 160 }} />
               </Form.Item>
             </Space>
+            <Form.Item
+              name="notify_channel_id"
+              label="通知渠道"
+              style={{ marginBottom: 8 }}
+            >
+              <Select
+                placeholder="不通知"
+                allowClear
+                style={{ width: '100%' }}
+                suffixIcon={<BellOutlined />}
+              >
+                {userChannels.map(ch => (
+                  <Select.Option key={ch.channel_id} value={ch.channel_id}>
+                    <Space>
+                      <Tag color="blue" style={{ marginRight: 0 }}>{ch.channel_type}</Tag>
+                      {ch.channel_name}
+                      {!ch.has_chat_id && <span style={{ color: '#999', fontSize: 12 }}>(未关联会话)</span>}
+                    </Space>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
             <Form.Item
               name="question"
               label="任务内容"

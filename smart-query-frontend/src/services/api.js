@@ -995,4 +995,8 @@ export const channelService = {
     const response = await apiClient.post('/channels/bind-code');
     return response.data;
   },
+  getUserBindingsWithChannel: async () => {
+    const response = await apiClient.get('/channels/user-bindings');
+    return response.data;
+  },
 };

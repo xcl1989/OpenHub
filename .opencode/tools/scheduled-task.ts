@@ -34,7 +34,7 @@ async function callAPI(
 
 export const scheduled_task_create = tool({
   description:
-    "创建定时任务。将一个问题按 cron 表达式定时发送给 AI 执行。参数: name(任务名称), question(要发送给AI的问题), cron_expression(APScheduler标准cron，5段空格分隔：分 时 日 月 周，*表示任意值，如 '0 9 * * *' 表示每天9点，'0 5 16 4 *' 表示4月16日5点，'*/30 * * * *' 表示每30分钟), model(可选，指定模型ID)",
+    "创建定时任务。将一个问题按 cron 表达式定时发送给 AI 执行。参数: name(任务名称), question(要发送给AI的问题), cron_expression(APScheduler标准cron，5段空格分隔：分 时 日 月 周，*表示任意值，如 '0 9 * * *' 表示每天9点，'0 5 16 4 *' 表示4月16日5点，'*/30 * * * *' 表示每30分钟), model(可选，指定模型ID), notify_channel_id(可选，指定通知渠道ID，结果将推送到该渠道)",
   args: {
     name: tool.schema.string().describe("任务名称，如'每日在建项目查询'"),
     question: tool.schema
@@ -49,6 +49,10 @@ export const scheduled_task_create = tool({
       .string()
       .optional()
       .describe("可选，指定模型ID。不填使用默认模型"),
+    notify_channel_id: tool.schema
+      .number()
+      .optional()
+      .describe("可选，指定通知渠道ID。执行结果将推送到该飞书渠道。需要用户已绑定该渠道"),
   },
   async execute(args, context) {
     const body: Record<string, unknown> = {
@@ -57,6 +61,7 @@ export const scheduled_task_create = tool({
       cron_expression: args.cron_expression,
     }
     if (args.model) body.model_id = args.model
+    if (args.notify_channel_id) body.notify_channel_id = args.notify_channel_id
     const result = await callAPI("/tasks", "POST", body, context.directory)
     try {
       const parsed = JSON.parse(result)
@@ -97,7 +102,7 @@ export const scheduled_task_list = tool({
 
 export const scheduled_task_update = tool({
   description:
-    "修改已有定时任务的名称、问题或执行时间。只需传入要修改的字段。参数: task_id(任务ID), name(可选), question(可选), cron_expression(可选)",
+    "修改已有定时任务的名称、问题或执行时间。只需传入要修改的字段。参数: task_id(任务ID), name(可选), question(可选), cron_expression(可选), notify_channel_id(可选)",
   args: {
     task_id: tool.schema.number().describe("要修改的任务ID"),
     name: tool.schema.string().optional().describe("新的任务名称"),
@@ -106,12 +111,19 @@ export const scheduled_task_update = tool({
       .string()
       .optional()
       .describe("新的 cron 表达式"),
+    notify_channel_id: tool.schema
+      .number()
+      .optional()
+      .describe("新的通知渠道ID，传0清除通知"),
   },
   async execute(args, context) {
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
     if (args.question) body.question = args.question
     if (args.cron_expression) body.cron_expression = args.cron_expression
+    if (args.notify_channel_id !== undefined) {
+      body.notify_channel_id = args.notify_channel_id || null
+    }
     if (Object.keys(body).length === 0) {
       return "没有指定要修改的字段，请至少提供 name、question 或 cron_expression 之一。"
     }

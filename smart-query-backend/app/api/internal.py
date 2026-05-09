@@ -63,12 +63,14 @@ class TaskCreateRequest(BaseModel):
     cron_expression: str = Field(..., max_length=100)
     model_id: Optional[str] = None
     agent: str = "build"
+    notify_channel_id: Optional[int] = None
 
 
 class TaskUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     question: Optional[str] = None
     cron_expression: Optional[str] = Field(None, max_length=100)
+    notify_channel_id: Optional[int] = None
 
 
 @router.post("/tasks")
@@ -90,6 +92,10 @@ async def create_task(
     )
     if not task:
         raise HTTPException(status_code=500, detail="创建任务失败")
+
+    if body.notify_channel_id:
+        database.update_task(task["id"], notify_channel_id=body.notify_channel_id)
+        task = database.get_task(task["id"])
 
     from app.services.scheduler import get_scheduler
 
@@ -124,7 +130,13 @@ async def update_task(
     if not task or task["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    fields = {}
+    raw = body.model_dump()
+    for k, v in raw.items():
+        if v is not None:
+            fields[k] = v
+        elif k == "notify_channel_id":
+            fields[k] = None
     if not fields:
         return {"ok": True, "task": task}
 

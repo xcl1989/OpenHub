@@ -255,6 +255,11 @@ async def execute_task(task_id: int):
         print(f"[TaskExecutor] 任务执行成功: {task['name']} ({duration}ms)")
 
         try:
+            await _notify_channel(task, full_text, preview)
+        except Exception as ch_err:
+            print(f"[TaskExecutor] 渠道通知失败: {ch_err}")
+
+        try:
             if workspace and task.get("user_id"):
                 if not await asyncio.to_thread(git_snapshot.is_git_repo, workspace):
                     await asyncio.to_thread(git_snapshot.init_git_repo, workspace)
@@ -309,3 +314,30 @@ async def _save_assistant_msg(
             agent,
             model_str,
         )
+
+
+async def _notify_channel(task: dict, full_text: str, preview: str):
+    notify_channel_id = task.get("notify_channel_id")
+    if not notify_channel_id:
+        return
+
+    user_id = task["user_id"]
+    binding = await asyncio.to_thread(
+        database.get_user_channel_binding, user_id, notify_channel_id
+    )
+    if not binding or not binding.get("external_chat_id"):
+        return
+
+    channel = await asyncio.to_thread(database.get_channel_by_id, notify_channel_id)
+    if not channel:
+        return
+
+    from app.services.channels.dispatcher import get_adapter
+
+    adapter = get_adapter(notify_channel_id)
+    if not adapter:
+        return
+
+    msg = f"⏰ 定时任务「{task['name']}」执行完成\n\n{full_text[:3000]}"
+    await adapter.smart_send(binding["external_chat_id"], msg)
+    print(f"[TaskExecutor] 已推送结果到渠道 {notify_channel_id}")
