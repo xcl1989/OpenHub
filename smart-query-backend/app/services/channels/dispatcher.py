@@ -259,25 +259,6 @@ async def _process_channel_query(
         max_wait_count = 6
         wait_interval = 60.0
 
-        CARD_ELEMENT_ID = "content_md"
-
-        streaming_card_id = ""
-        streaming_enabled = False
-        streaming_full_text = ""
-        streaming_sequence = 0
-
-        card_result = await adapter.create_streaming_card(CARD_ELEMENT_ID)
-        if card_result:
-            streaming_card_id = card_result["card_id"]
-            sent_msg_id = await adapter.send_card(chat_id, streaming_card_id)
-            if sent_msg_id:
-                streaming_enabled = True
-                print(f"[ChannelDispatcher] 流式卡片已创建: card_id={streaming_card_id}", flush=True)
-            else:
-                print("[ChannelDispatcher] 流式卡片发送失败，回退到逐条消息", flush=True)
-        else:
-            print("[ChannelDispatcher] 流式卡片创建失败，回退到逐条消息", flush=True)
-
         stream_client = await opencode_client.get_client()
         async with stream_client.stream(
             "GET",
@@ -326,7 +307,7 @@ async def _process_channel_query(
                         msg_id = info.get("id", "")
                         role = info.get("role", "")
                         if role == "assistant" and msg_id != current_message_id:
-                            if not streaming_enabled and current_message_text.strip():
+                            if current_message_text.strip():
                                 all_responses.append(current_message_text.strip())
                                 await _safe_send(adapter, chat_id, current_message_text.strip())
                             current_message_id = msg_id
@@ -343,7 +324,7 @@ async def _process_channel_query(
                             part_types[part_id] = part_type
                         print(f"[ChannelDispatcher] part_updated: id={part_id} type={part_type} has_end={bool(part.get('time', {}).get('end'))}", flush=True)
                         if part_type == "text" and part.get("time", {}).get("end"):
-                            if not streaming_enabled and current_message_text.strip():
+                            if current_message_text.strip():
                                 all_responses.append(current_message_text.strip())
                                 await _safe_send(adapter, chat_id, current_message_text.strip())
                                 current_message_text = ""
@@ -381,15 +362,6 @@ async def _process_channel_query(
                         pt = part_types.get(part_id, "")
                         if delta and pt == "text":
                             current_message_text += delta
-                            if streaming_enabled:
-                                streaming_full_text += delta
-                                streaming_sequence += 1
-                                ok = await adapter.update_card_text(
-                                    streaming_card_id, CARD_ELEMENT_ID,
-                                    streaming_full_text, streaming_sequence,
-                                )
-                                if not ok and matched_events <= 5:
-                                    print(f"[ChannelDispatcher] update_card_text 失败 seq={streaming_sequence}", flush=True)
                         if delta and matched_events <= 30:
                             print(f"[ChannelDispatcher] delta: partID={part_id} type={pt!r} len={len(delta)} text_len={len(current_message_text)}", flush=True)
 
@@ -401,21 +373,9 @@ async def _process_channel_query(
                 except json.JSONDecodeError:
                     continue
 
-        if streaming_enabled:
-            if streaming_sequence > 0 or streaming_full_text.strip():
-                streaming_sequence += 1
-                await adapter.update_card_text(
-                    streaming_card_id, CARD_ELEMENT_ID,
-                    streaming_full_text, streaming_sequence,
-                )
-            await adapter.disable_streaming(streaming_card_id)
-            print("[ChannelDispatcher] 流式卡片已关闭", flush=True)
-            if streaming_full_text.strip():
-                all_responses.append(streaming_full_text.strip())
-        else:
-            if current_message_text.strip():
-                all_responses.append(current_message_text.strip())
-                await _safe_send(adapter, chat_id, current_message_text.strip())
+        if current_message_text.strip():
+            all_responses.append(current_message_text.strip())
+            await _safe_send(adapter, chat_id, current_message_text.strip())
 
         full_response = "\n".join(all_responses)
 
@@ -446,11 +406,6 @@ async def _process_channel_query(
         print(f"[ChannelDispatcher] ERROR: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        try:
-            if streaming_card_id:
-                await adapter.disable_streaming(streaming_card_id)
-        except Exception:
-            pass
         try:
             await adapter.send_message(chat_id, f"处理出错: {str(e)[:200]}")
         except Exception:
