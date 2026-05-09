@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+import uuid
 
 
 import httpx
@@ -310,6 +311,178 @@ class FeishuAdapter(ChannelAdapter):
 
     async def send_typing_indicator(self, chat_id: str) -> None:
         pass
+
+    async def create_streaming_card(
+        self, element_id: str = "content_md", initial_content: str = ""
+    ) -> dict | None:
+        token = await self._get_tenant_token()
+        card_json = {
+            "schema": "2.0",
+            "header": {
+                "title": {"content": "AI 回复", "tag": "plain_text"}
+            },
+            "config": {
+                "streaming_mode": True,
+                "summary": {"content": "正在生成回复..."},
+                "streaming_config": {
+                    "print_frequency_ms": {"default": 70},
+                    "print_step": {"default": 1},
+                    "print_strategy": "delay",
+                },
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": initial_content,
+                        "element_id": element_id,
+                    }
+                ]
+            },
+        }
+        body = {
+            "type": "card_json",
+            "data": json.dumps(card_json, ensure_ascii=False),
+        }
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/cardkit/v1/card",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                card_data = data.get("data", {})
+                return {
+                    "card_id": card_data.get("card_id", ""),
+                    "version": card_data.get("version", ""),
+                }
+            logger.warning(
+                "创建流式卡片失败: code=%s msg=%s",
+                data.get("code"),
+                data.get("msg"),
+            )
+        else:
+            logger.warning(
+                "创建流式卡片 HTTP 错误: %d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+        return None
+
+    async def send_card(self, chat_id: str, card_id: str) -> str | None:
+        token = await self._get_tenant_token()
+        content = json.dumps(
+            {"type": "card", "data": {"card_id": card_id}},
+            ensure_ascii=False,
+        )
+        body = {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": content,
+        }
+        client = await self._get_http_client()
+        resp = await client.post(
+            f"{FEISHU_BASE_URL}/im/v1/messages",
+            params={"receive_id_type": "chat_id"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                msg_data = data.get("data", {})
+                return msg_data.get("message_id", "")
+            logger.warning(
+                "发送卡片失败: code=%s msg=%s",
+                data.get("code"),
+                data.get("msg"),
+            )
+        else:
+            logger.warning(
+                "发送卡片 HTTP 错误: %d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+        return None
+
+    async def update_card_text(
+        self, card_id: str, element_id: str, full_text: str, sequence: int
+    ) -> bool:
+        token = await self._get_tenant_token()
+        body = {
+            "content": full_text,
+            "uuid": str(uuid.uuid4()),
+            "sequence": sequence,
+        }
+        client = await self._get_http_client()
+        resp = await client.put(
+            f"{FEISHU_BASE_URL}/cardkit/v1/card/{card_id}/element/{element_id}/content",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                return True
+            logger.warning(
+                "更新卡片文本失败: code=%s msg=%s",
+                data.get("code"),
+                data.get("msg"),
+            )
+        else:
+            logger.warning(
+                "更新卡片文本 HTTP 错误: %d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+        return False
+
+    async def disable_streaming(self, card_id: str) -> bool:
+        token = await self._get_tenant_token()
+        settings = json.dumps(
+            {"config": {"streaming_mode": False}}, ensure_ascii=False
+        )
+        body = {
+            "settings": settings,
+            "uuid": str(uuid.uuid4()),
+            "sequence": 1,
+        }
+        client = await self._get_http_client()
+        resp = await client.patch(
+            f"{FEISHU_BASE_URL}/cardkit/v1/card/{card_id}/settings",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0:
+                return True
+            logger.warning(
+                "关闭流式模式失败: code=%s msg=%s",
+                data.get("code"),
+                data.get("msg"),
+            )
+        else:
+            logger.warning(
+                "关闭流式模式 HTTP 错误: %d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+        return False
 
 
 def _clean_ai_output(text: str) -> str:
