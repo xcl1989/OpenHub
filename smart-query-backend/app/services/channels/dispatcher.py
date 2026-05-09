@@ -260,13 +260,11 @@ async def _process_channel_query(
         wait_interval = 60.0
 
         CARD_ELEMENT_ID = "content_md"
-        CARD_UPDATE_INTERVAL = 0.1
 
         streaming_card_id = ""
         streaming_enabled = False
         streaming_full_text = ""
         streaming_sequence = 0
-        last_card_update = 0.0
 
         card_result = await adapter.create_streaming_card(CARD_ELEMENT_ID)
         if card_result:
@@ -385,14 +383,11 @@ async def _process_channel_query(
                             current_message_text += delta
                             if streaming_enabled:
                                 streaming_full_text += delta
-                                now = time.time()
-                                if now - last_card_update >= CARD_UPDATE_INTERVAL:
-                                    streaming_sequence += 1
-                                    await adapter.update_card_text(
-                                        streaming_card_id, CARD_ELEMENT_ID,
-                                        streaming_full_text, streaming_sequence,
-                                    )
-                                    last_card_update = now
+                                streaming_sequence += 1
+                                await adapter.update_card_text(
+                                    streaming_card_id, CARD_ELEMENT_ID,
+                                    streaming_full_text, streaming_sequence,
+                                )
                         if delta and matched_events <= 30:
                             print(f"[ChannelDispatcher] delta: partID={part_id} type={pt!r} len={len(delta)} text_len={len(current_message_text)}", flush=True)
 

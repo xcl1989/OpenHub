@@ -325,8 +325,8 @@ class FeishuAdapter(ChannelAdapter):
                 "streaming_mode": True,
                 "summary": {"content": "正在生成回复..."},
                 "streaming_config": {
-                    "print_frequency_ms": {"default": 70},
-                    "print_step": {"default": 2},
+                    "print_frequency_ms": {"default": 10},
+                    "print_step": {"default": 50},
                     "print_strategy": "fast",
                 },
             },
