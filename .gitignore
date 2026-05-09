@@ -57,3 +57,6 @@ smart-query-backend/workspace/*/
 
 #opencode files
 AGENTS.md
+smart-query-backend/data/*.db
+smart-query-backend/data/*.db-shm
+smart-query-backend/data/*.db-wal

@@ -861,25 +861,23 @@ async def admin_system_health(admin: dict = Depends(get_admin_user)):
     except Exception as e:
         result["opencode"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
 
-    mysql_start = time.time()
+    sqlite_start = time.time()
     try:
         from app.database import get_db_connection
 
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                cursor.execute("SHOW GLOBAL STATUS LIKE 'Threads_connected'")
-                threads_row = cursor.fetchone()
-                mysql_latency = round((time.time() - mysql_start) * 1000)
-                result["mysql"] = {
-                    "status": "healthy",
-                    "latency_ms": mysql_latency,
-                    "threads_connected": int(
-                        threads_row["Value"] if threads_row else 0
-                    ),
-                }
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.execute("SELECT COUNT(*) as cnt FROM conversation_sessions")
+            sessions_row = cursor.fetchone()
+            sqlite_latency = round((time.time() - sqlite_start) * 1000)
+            result["sqlite"] = {
+                "status": "healthy",
+                "latency_ms": sqlite_latency,
+                "db_path": str(Path(config.SQLITE_DB_PATH).name),
+            }
     except Exception as e:
-        result["mysql"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
+        result["sqlite"] = {"status": "unhealthy", "error": str(e), "latency_ms": None}
 
     redis_start = time.time()
     try:
@@ -905,12 +903,12 @@ async def admin_system_health(admin: dict = Depends(get_admin_user)):
         from app.database import get_db_connection
 
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM conversation_sessions "
-                    "WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
-                )
-                active = cursor.fetchone()["cnt"]
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM conversation_sessions "
+                "WHERE updated_at >= datetime('now', 'localtime', '-1 hour')"
+            )
+            active = cursor.fetchone()["cnt"]
         result["sessions"] = {"active_1h": active}
     except Exception:
         result["sessions"] = {"active_1h": 0}

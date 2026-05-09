@@ -84,7 +84,7 @@ function SystemHealthDashboard() {
   if (loading && !health) return <Spin style={{ display: 'block', margin: '60px auto' }} />;
 
   const oc = health?.opencode || {};
-  const mysql = health?.mysql || {};
+  const sqlite = health?.sqlite || {};
   const redis = health?.redis || {};
   const sessions = health?.sessions || {};
 
@@ -150,17 +150,17 @@ function SystemHealthDashboard() {
         <Col xs={12} sm={6}>
           <Card size="small">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>MySQL</Text>
-              <StatusTag healthy={mysql.status === 'healthy'} label={mysql.status === 'healthy' ? '正常' : '异常'} />
+              <Text type="secondary" style={{ fontSize: 12 }}>SQLite</Text>
+              <StatusTag healthy={sqlite.status === 'healthy'} label={sqlite.status === 'healthy' ? '正常' : '异常'} />
             </div>
             <Statistic
-              value={mysql.latency_ms ?? '-'}
-              suffix={mysql.latency_ms ? 'ms' : ''}
+              value={sqlite.latency_ms ?? '-'}
+              suffix={sqlite.latency_ms ? 'ms' : ''}
               prefix={<DatabaseOutlined />}
               valueStyle={{ fontSize: isMobile ? 16 : 20 }}
             />
-            {mysql.threads_connected != null && (
-              <Text type="secondary" style={{ fontSize: 11 }}>连接: {mysql.threads_connected}</Text>
+            {sqlite.db_path && (
+              <Text type="secondary" style={{ fontSize: 11 }}>文件: {sqlite.db_path}</Text>
             )}
           </Card>
         </Col>

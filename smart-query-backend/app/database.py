@@ -1,47 +1,36 @@
-"""数据库连接模块"""
-
-import os
-import pymysql
+import sqlite3
 import json
+import os
 from typing import Optional
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timedelta
 from contextlib import contextmanager
 from app.config import config
 
-DB_CONFIG = {
-    "host": config.DB_HOST,
-    "user": config.DB_USER,
-    "password": config.DB_PASSWORD,
-    "database": config.DB_NAME,
-    "charset": config.DB_CHARSET,
-    "cursorclass": pymysql.cursors.DictCursor,
-}
-
-_db_pool = None
+DB_PATH = config.SQLITE_DB_PATH
 
 
-def _get_pool():
-    global _db_pool
-    if _db_pool is None:
-        from dbutils.pooled_db import PooledDB
+@contextmanager
+def _cursor(conn):
+    c = conn.cursor()
+    try:
+        yield c
+    finally:
+        c.close()
 
-        _db_pool = PooledDB(
-            creator=pymysql,
-            maxconnections=20,
-            mincached=2,
-            maxcached=10,
-            blocking=True,
-            **DB_CONFIG,
-        )
-    return _db_pool
+
+def _get_connection():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
 
 @contextmanager
 def get_db_connection():
-    """获取数据库连接的上下文管理器（连接池）"""
     conn = None
     try:
-        conn = _get_pool().connection()
+        conn = _get_connection()
         yield conn
         conn.commit()
     except Exception as e:
@@ -54,35 +43,21 @@ def get_db_connection():
 
 
 def save_session(session_id: str, title: str, user_id: Optional[int] = None) -> bool:
-    """
-    保存会话到数据库
-
-    Args:
-        session_id: opencode 会话 ID
-        title: 会话标题
-        user_id: 用户 ID
-
-    Returns:
-        是否保存成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # 检查会话是否已存在
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id FROM conversation_sessions WHERE session_id = %s",
+                    "SELECT id FROM conversation_sessions WHERE session_id = ?",
                     (session_id,),
                 )
                 if cursor.fetchone():
-                    # 更新现有会话
                     cursor.execute(
-                        "UPDATE conversation_sessions SET title = %s, updated_at = NOW() WHERE session_id = %s",
+                        "UPDATE conversation_sessions SET title = ?, updated_at = datetime('now','localtime') WHERE session_id = ?",
                         (title, session_id),
                     )
                 else:
-                    # 插入新会话
                     cursor.execute(
-                        "INSERT INTO conversation_sessions (session_id, title, user_id) VALUES (%s, %s, %s)",
+                        "INSERT INTO conversation_sessions (session_id, title, user_id) VALUES (?, ?, ?)",
                         (session_id, title, user_id),
                     )
         return True
@@ -103,14 +78,12 @@ def save_message(
 ) -> dict:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                import json
-
+            with _cursor(conn) as cursor:
                 metadata_json = json.dumps(metadata) if metadata else None
                 cursor.execute(
                     "INSERT INTO conversation_messages "
                     "(session_id, role, agent, model, content, metadata, opencode_message_id, turn_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         session_id,
                         role,
@@ -126,13 +99,12 @@ def save_message(
                 message_id = cursor.lastrowid
                 image_ids = []
 
-                # 如果有图片，保存到 images 表
                 if metadata and "images" in metadata and metadata["images"]:
                     for img in metadata["images"]:
                         cursor.execute(
-                            """INSERT INTO conversation_images 
-                               (message_id, filename, mime_type, base64_data, size) 
-                               VALUES (%s, %s, %s, %s, %s)""",
+                            """INSERT INTO conversation_images
+                               (message_id, filename, mime_type, base64_data, size)
+                               VALUES (?, ?, ?, ?, ?)""",
                             (
                                 message_id,
                                 img.get("filename"),
@@ -153,9 +125,9 @@ def save_message(
 def get_session_owner(session_id: str) -> Optional[int]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT user_id FROM conversation_sessions WHERE session_id = %s",
+                    "SELECT user_id FROM conversation_sessions WHERE session_id = ?",
                     (session_id,),
                 )
                 row = cursor.fetchone()
@@ -168,67 +140,47 @@ def get_session_owner(session_id: str) -> Optional[int]:
 def get_sessions(
     limit: int = 10, offset: int = 0, user_id: Optional[int] = None
 ) -> list[dict]:
-    """
-    获取会话列表（支持分页）
-
-    Args:
-        limit: 每页数量，默认 10
-        offset: 偏移量，默认 0
-        user_id: 用户 ID，指定后只返回该用户的会话
-
-    Returns:
-        会话列表
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 if user_id is not None:
                     cursor.execute(
                         """
-                        SELECT session_id, title, created_at, updated_at 
-                        FROM conversation_sessions 
-                        WHERE status = 0 AND user_id = %s
-                        ORDER BY updated_at DESC 
-                        LIMIT %s OFFSET %s
+                        SELECT session_id, title, created_at, updated_at
+                        FROM conversation_sessions
+                        WHERE status = 0 AND user_id = ?
+                        ORDER BY updated_at DESC
+                        LIMIT ? OFFSET ?
                         """,
                         (user_id, limit, offset),
                     )
                 else:
                     cursor.execute(
                         """
-                        SELECT session_id, title, created_at, updated_at 
-                        FROM conversation_sessions 
+                        SELECT session_id, title, created_at, updated_at
+                        FROM conversation_sessions
                         WHERE status = 0
-                        ORDER BY updated_at DESC 
-                        LIMIT %s OFFSET %s
+                        ORDER BY updated_at DESC
+                        LIMIT ? OFFSET ?
                         """,
                         (limit, offset),
                     )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取会话列表失败：{e}")
         return []
 
 
 def get_sessions_count(user_id: Optional[int] = None) -> int:
-    """
-    获取会话总数
-
-    Args:
-        user_id: 用户 ID，指定后只统计该用户的会话
-
-    Returns:
-        会话总数
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 if user_id is not None:
                     cursor.execute(
                         """
                         SELECT COUNT(*) as count
-                        FROM conversation_sessions 
-                        WHERE status = 0 AND user_id = %s
+                        FROM conversation_sessions
+                        WHERE status = 0 AND user_id = ?
                         """,
                         (user_id,),
                     )
@@ -236,34 +188,23 @@ def get_sessions_count(user_id: Optional[int] = None) -> int:
                     cursor.execute(
                         """
                         SELECT COUNT(*) as count
-                        FROM conversation_sessions 
+                        FROM conversation_sessions
                         WHERE status = 0
-                        """,
+                        """
                     )
                 result = cursor.fetchone()
-                return result.get("count", 0) if result else 0
+                return result["count"] if result else 0
     except Exception as e:
         print(f"获取会话总数失败：{e}")
         return 0
 
 
 def get_messages(session_id: str, limit: int = 50) -> list[dict]:
-    """
-    获取会话的所有消息
-
-    Args:
-        session_id: 会话 ID
-        limit: 返回数量限制
-
-    Returns:
-        消息列表
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # 先检查会话是否存在且未被删除
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id FROM conversation_sessions WHERE session_id = %s AND status = 0",
+                    "SELECT id FROM conversation_sessions WHERE session_id = ? AND status = 0",
                     (session_id,),
                 )
                 if not cursor.fetchone():
@@ -273,32 +214,28 @@ def get_messages(session_id: str, limit: int = 50) -> list[dict]:
                     """
                     SELECT id, role, agent, model, content, metadata, created_at,
                            opencode_message_id, turn_id
-                    FROM conversation_messages 
-                    WHERE session_id = %s AND visible = 1
-                    ORDER BY created_at DESC 
-                    LIMIT %s
+                    FROM conversation_messages
+                    WHERE session_id = ? AND visible = 1
+                    ORDER BY created_at DESC
+                    LIMIT ?
                     """,
                     (session_id, limit),
                 )
-                messages = list(reversed(cursor.fetchall()))
-
-                # 解析 metadata 和加载图片元数据（不包含 base64）
-                import json
-                from datetime import datetime, date
+                messages = list(reversed([dict(r) for r in cursor.fetchall()]))
 
                 if not messages:
                     return messages
 
                 msg_ids = [msg["id"] for msg in messages]
-
+                placeholders = ",".join(["?"] * len(msg_ids))
                 cursor.execute(
-                    """SELECT id, message_id, filename, mime_type, size 
-                       FROM conversation_images 
-                       WHERE message_id IN %s
+                    f"""SELECT id, message_id, filename, mime_type, size
+                       FROM conversation_images
+                       WHERE message_id IN ({placeholders})
                        ORDER BY id ASC""",
-                    (msg_ids,),
+                    msg_ids,
                 )
-                all_images = cursor.fetchall()
+                all_images = [dict(r) for r in cursor.fetchall()]
 
                 images_by_msg = {}
                 for img in all_images:
@@ -323,8 +260,10 @@ def get_messages(session_id: str, limit: int = 50) -> list[dict]:
                             if "base64" in img:
                                 del img["base64"]
 
-                    if isinstance(msg.get("created_at"), (datetime, date)):
-                        msg["created_at"] = msg["created_at"].isoformat()
+                    if isinstance(msg.get("created_at"), str):
+                        pass
+                    elif msg.get("created_at"):
+                        msg["created_at"] = str(msg["created_at"])
 
                     msg["db_id"] = msg.pop("id")
 
@@ -338,47 +277,28 @@ def get_messages(session_id: str, limit: int = 50) -> list[dict]:
 
 
 def get_image_by_id(image_id: int) -> dict | None:
-    """
-    根据 ID 获取图片的 base64 数据
-
-    Args:
-        image_id: 图片 ID
-
-    Returns:
-        图片数据 dict，不存在则返回 None
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """SELECT id, filename, mime_type, base64_data, size 
-                       FROM conversation_images 
-                       WHERE id = %s""",
+                    """SELECT id, filename, mime_type, base64_data, size
+                       FROM conversation_images
+                       WHERE id = ?""",
                     (image_id,),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取图片失败：{e}")
         return None
 
 
 def get_latest_messages(session_id: str, limit: int = 10) -> list[dict]:
-    """
-    获取会话最新的消息
-
-    Args:
-        session_id: 会话 ID
-        limit: 返回数量限制，默认 10 条
-
-    Returns:
-        消息列表
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # 先检查会话是否存在且未被删除
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id FROM conversation_sessions WHERE session_id = %s AND status = 0",
+                    "SELECT id FROM conversation_sessions WHERE session_id = ? AND status = 0",
                     (session_id,),
                 )
                 if not cursor.fetchone():
@@ -386,18 +306,15 @@ def get_latest_messages(session_id: str, limit: int = 10) -> list[dict]:
 
                 cursor.execute(
                     """
-                    SELECT role, content, metadata, created_at 
-                    FROM conversation_messages 
-                    WHERE session_id = %s 
-                    ORDER BY created_at DESC 
-                    LIMIT %s
+                    SELECT role, content, metadata, created_at
+                    FROM conversation_messages
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
                     """,
                     (session_id, limit),
                 )
-                messages = cursor.fetchall()
-                # 解析 metadata JSON 并反转顺序
-                import json
-
+                messages = [dict(r) for r in cursor.fetchall()]
                 result = []
                 for msg in messages:
                     if msg.get("metadata"):
@@ -410,32 +327,22 @@ def get_latest_messages(session_id: str, limit: int = 10) -> list[dict]:
 
 
 def archive_session(session_id: str) -> bool:
-    """
-    归档会话（软删除）
-
-    Args:
-        session_id: 会话 ID
-
-    Returns:
-        是否归档成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # 先检查会话是否存在
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id FROM conversation_sessions WHERE session_id = %s AND status = 0",
+                    "SELECT id FROM conversation_sessions WHERE session_id = ? AND status = 0",
                     (session_id,),
                 )
                 if not cursor.fetchone():
                     return False
 
                 cursor.execute(
-                    "UPDATE conversation_sessions SET status = -1, updated_at = NOW() WHERE session_id = %s",
+                    "UPDATE conversation_sessions SET status = -1, updated_at = datetime('now','localtime') WHERE session_id = ?",
                     (session_id,),
                 )
                 cursor.execute(
-                    "DELETE FROM conversation_messages WHERE session_id = %s",
+                    "DELETE FROM conversation_messages WHERE session_id = ?",
                     (session_id,),
                 )
         return True
@@ -445,47 +352,28 @@ def archive_session(session_id: str) -> bool:
 
 
 def get_user_model_permissions(user_id: int) -> list[dict]:
-    """
-    获取用户的模型权限列表
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        权限列表 [{model_id, provider_id, monthly_limit, current_usage, usage_reset_at}]
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT model_id, provider_id, monthly_limit, current_usage, usage_reset_at "
-                    "FROM user_model_permissions WHERE user_id = %s",
+                    "FROM user_model_permissions WHERE user_id = ?",
                     (user_id,),
                 )
-                return list(cursor.fetchall())
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户模型权限失败：{e}")
         return []
 
 
 def set_user_model_permissions(user_id: int, models: list[dict]) -> bool:
-    """
-    批量设置用户的模型权限（覆盖式写入）
-
-    Args:
-        user_id: 用户 ID
-        models: [{modelID, providerID, enabled, monthlyLimit}, ...]
-
-    Returns:
-        是否成功
-    """
     today = date_type.today()
     reset_date = date_type(today.year, today.month, 1)
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "DELETE FROM user_model_permissions WHERE user_id = %s",
+                    "DELETE FROM user_model_permissions WHERE user_id = ?",
                     (user_id,),
                 )
                 for m in models:
@@ -494,14 +382,14 @@ def set_user_model_permissions(user_id: int, models: list[dict]) -> bool:
                     cursor.execute(
                         "INSERT INTO user_model_permissions "
                         "(user_id, model_id, provider_id, monthly_limit, current_usage, usage_reset_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        "VALUES (?, ?, ?, ?, ?, ?)",
                         (
                             user_id,
                             m["modelID"],
                             m["providerID"],
                             m.get("monthlyLimit", 0),
                             0,
-                            reset_date,
+                            reset_date.isoformat(),
                         ),
                     )
         return True
@@ -513,25 +401,14 @@ def set_user_model_permissions(user_id: int, models: list[dict]) -> bool:
 def check_and_increment_usage(
     user_id: int, model_id: str, provider_id: str
 ) -> tuple[bool, int, int]:
-    """
-    检查用户模型使用权限并原子递增用量
-
-    Args:
-        user_id: 用户 ID
-        model_id: 模型 ID
-        provider_id: 提供商 ID
-
-    Returns:
-        (是否允许, 已用次数, 月上限(0=不限))
-    """
     today = date_type.today()
     current_month = date_type(today.year, today.month, 1)
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT monthly_limit, current_usage, usage_reset_at "
-                    "FROM user_model_permissions WHERE user_id = %s AND model_id = %s AND provider_id = %s",
+                    "FROM user_model_permissions WHERE user_id = ? AND model_id = ? AND provider_id = ?",
                     (user_id, model_id, provider_id),
                 )
                 row = cursor.fetchone()
@@ -542,12 +419,15 @@ def check_and_increment_usage(
                 current_usage = row["current_usage"]
                 usage_reset_at = row["usage_reset_at"]
 
+                if isinstance(usage_reset_at, str):
+                    usage_reset_at = date_type.fromisoformat(usage_reset_at)
+
                 if usage_reset_at < current_month:
                     current_usage = 0
                     cursor.execute(
-                        "UPDATE user_model_permissions SET current_usage = 0, usage_reset_at = %s "
-                        "WHERE user_id = %s AND model_id = %s AND provider_id = %s",
-                        (current_month, user_id, model_id, provider_id),
+                        "UPDATE user_model_permissions SET current_usage = 0, usage_reset_at = ? "
+                        "WHERE user_id = ? AND model_id = ? AND provider_id = ?",
+                        (current_month.isoformat(), user_id, model_id, provider_id),
                     )
 
                 if monthly_limit > 0 and current_usage >= monthly_limit:
@@ -555,7 +435,7 @@ def check_and_increment_usage(
 
                 cursor.execute(
                     "UPDATE user_model_permissions SET current_usage = current_usage + 1 "
-                    "WHERE user_id = %s AND model_id = %s AND provider_id = %s",
+                    "WHERE user_id = ? AND model_id = ? AND provider_id = ?",
                     (user_id, model_id, provider_id),
                 )
                 return True, current_usage + 1, monthly_limit
@@ -565,65 +445,43 @@ def check_and_increment_usage(
 
 
 def get_user_by_username(username: str) -> dict | None:
-    """
-    根据用户名获取用户信息
-
-    Args:
-        username: 用户名
-
-    Returns:
-        用户信息 dict，包含 id, username, password_hash, disabled, is_admin 字段；不存在则返回 None
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id, username, password_hash, disabled, is_admin FROM users WHERE username = %s",
+                    "SELECT id, username, password_hash, disabled, is_admin FROM users WHERE username = ?",
                     (username,),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取用户失败：{e}")
         return None
 
 
 def get_user_by_id(user_id: int) -> dict | None:
-    """
-    根据 ID 获取用户信息
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        用户信息 dict；不存在则返回 None
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id, username, password_hash, disabled, is_admin, workspace_path FROM users WHERE id = %s",
+                    "SELECT id, username, password_hash, disabled, is_admin, workspace_path FROM users WHERE id = ?",
                     (user_id,),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取用户失败：{e}")
         return None
 
 
 def list_users() -> list[dict]:
-    """
-    获取所有用户列表（不含密码）
-
-    Returns:
-        用户信息列表
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT id, username, disabled, is_admin, created_at, updated_at, workspace_path FROM users ORDER BY id ASC"
                 )
-                return list(cursor.fetchall())
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户列表失败：{e}")
         return []
@@ -636,24 +494,11 @@ def create_user(
     is_admin: bool = False,
     workspace_path: Optional[str] = None,
 ) -> bool:
-    """
-    创建新用户
-
-    Args:
-        username: 用户名
-        password_hash: 加密后的密码
-        disabled: 是否禁用
-        is_admin: 是否管理员
-        workspace_path: 用户工作空间路径
-
-    Returns:
-        是否创建成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO users (username, password_hash, disabled, is_admin, workspace_path) VALUES (%s, %s, %s, %s, %s)",
+                    "INSERT INTO users (username, password_hash, disabled, is_admin, workspace_path) VALUES (?, ?, ?, ?, ?)",
                     (
                         username,
                         password_hash,
@@ -674,41 +519,29 @@ def update_user(
     disabled: bool | None = None,
     is_admin: bool | None = None,
 ) -> bool:
-    """
-    更新用户信息
-
-    Args:
-        username: 用户名
-        password_hash: 新密码哈希（可选）
-        disabled: 是否禁用（可选）
-        is_admin: 是否管理员（可选）
-
-    Returns:
-        是否更新成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 updates = []
                 values = []
 
                 if password_hash is not None:
-                    updates.append("password_hash = %s")
+                    updates.append("password_hash = ?")
                     values.append(password_hash)
 
                 if disabled is not None:
-                    updates.append("disabled = %s")
+                    updates.append("disabled = ?")
                     values.append(1 if disabled else 0)
 
                 if is_admin is not None:
-                    updates.append("is_admin = %s")
+                    updates.append("is_admin = ?")
                     values.append(1 if is_admin else 0)
 
                 if not updates:
                     return True
 
                 values.append(username)
-                query = f"UPDATE users SET {', '.join(updates)}, updated_at = NOW() WHERE username = %s"
+                query = f"UPDATE users SET {', '.join(updates)}, updated_at = datetime('now','localtime') WHERE username = ?"
                 cursor.execute(query, values)
         return True
     except Exception as e:
@@ -722,41 +555,29 @@ def update_user_by_id(
     disabled: bool | None = None,
     is_admin: bool | None = None,
 ) -> bool:
-    """
-    根据 ID 更新用户信息
-
-    Args:
-        user_id: 用户 ID
-        password_hash: 新密码哈希（可选）
-        disabled: 是否禁用（可选）
-        is_admin: 是否管理员（可选）
-
-    Returns:
-        是否更新成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 updates = []
                 values = []
 
                 if password_hash is not None:
-                    updates.append("password_hash = %s")
+                    updates.append("password_hash = ?")
                     values.append(password_hash)
 
                 if disabled is not None:
-                    updates.append("disabled = %s")
+                    updates.append("disabled = ?")
                     values.append(1 if disabled else 0)
 
                 if is_admin is not None:
-                    updates.append("is_admin = %s")
+                    updates.append("is_admin = ?")
                     values.append(1 if is_admin else 0)
 
                 if not updates:
                     return True
 
                 values.append(user_id)
-                query = f"UPDATE users SET {', '.join(updates)}, updated_at = NOW() WHERE id = %s"
+                query = f"UPDATE users SET {', '.join(updates)}, updated_at = datetime('now','localtime') WHERE id = ?"
                 cursor.execute(query, values)
         return True
     except Exception as e:
@@ -765,19 +586,10 @@ def update_user_by_id(
 
 
 def delete_user(user_id: int) -> bool:
-    """
-    删除用户
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        是否删除成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除用户失败：{e}")
@@ -785,20 +597,11 @@ def delete_user(user_id: int) -> bool:
 
 
 def get_system_config(key: str) -> Optional[str]:
-    """
-    获取系统配置值
-
-    Args:
-        key: 配置键
-
-    Returns:
-        配置值，不存在返回 None
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT config_value FROM system_config WHERE config_key = %s",
+                    "SELECT config_value FROM system_config WHERE config_key = ?",
                     (key,),
                 )
                 row = cursor.fetchone()
@@ -809,40 +612,21 @@ def get_system_config(key: str) -> Optional[str]:
 
 
 def set_system_config(key: str, value: str) -> bool:
-    """
-    设置系统配置值（upsert）
-
-    Args:
-        key: 配置键
-        value: 配置值
-
-    Returns:
-        是否成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO system_config (config_key, config_value) VALUES (%s, %s) "
-                    "ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)",
+                    "INSERT INTO system_config (config_key, config_value) VALUES (?, ?) "
+                    "ON CONFLICT(config_key) DO UPDATE SET config_value = excluded.config_value",
                     (key, value),
                 )
-                return True
+        return True
     except Exception as e:
         print(f"设置系统配置失败：{e}")
         return False
 
 
 def get_user_workspace(user_id: int) -> Optional[str]:
-    """
-    获取用户工作空间路径（优先从 Redis 缓存读取）
-
-    Args:
-        user_id: 用户 ID
-
-    Returns:
-        工作空间路径，不存在返回 None
-    """
     try:
         from app.core.auth import get_redis_client
 
@@ -853,9 +637,9 @@ def get_user_workspace(user_id: int) -> Optional[str]:
             return cached if cached != "__NONE__" else None
 
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT workspace_path FROM users WHERE id = %s", (user_id,)
+                    "SELECT workspace_path FROM users WHERE id = ?", (user_id,)
                 )
                 row = cursor.fetchone()
                 workspace = row["workspace_path"] if row else None
@@ -878,10 +662,10 @@ def log_usage(
 ) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO usage_logs (user_id, session_id, model_id, provider_id, agent, question_preview, duration_ms)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         user_id,
                         session_id,
@@ -899,15 +683,16 @@ def log_usage(
 
 
 def get_usage_stats(days: int = 30) -> dict:
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """SELECT DATE(created_at) as date, COUNT(*) as count
+                    """SELECT date(created_at) as date, COUNT(*) as count
                        FROM usage_logs
-                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                       GROUP BY DATE(created_at) ORDER BY date""",
-                    (days,),
+                       WHERE created_at >= ?
+                       GROUP BY date(created_at) ORDER BY date""",
+                    (cutoff,),
                 )
                 daily = [
                     {"date": str(row["date"]), "count": row["count"]}
@@ -917,9 +702,9 @@ def get_usage_stats(days: int = 30) -> dict:
                 cursor.execute(
                     """SELECT model_id, provider_id, COUNT(*) as count
                        FROM usage_logs
-                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                       WHERE created_at >= ?
                        GROUP BY model_id, provider_id ORDER BY count DESC""",
-                    (days,),
+                    (cutoff,),
                 )
                 by_model = [
                     {
@@ -933,9 +718,9 @@ def get_usage_stats(days: int = 30) -> dict:
                 cursor.execute(
                     """SELECT u.username, COUNT(ul.id) as count
                        FROM usage_logs ul JOIN users u ON ul.user_id = u.id
-                       WHERE ul.created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                       WHERE ul.created_at >= ?
                        GROUP BY ul.user_id, u.username ORDER BY count DESC LIMIT 20""",
-                    (days,),
+                    (cutoff,),
                 )
                 by_user = [
                     {"username": row["username"], "count": row["count"]}
@@ -943,9 +728,8 @@ def get_usage_stats(days: int = 30) -> dict:
                 ]
 
                 cursor.execute(
-                    """SELECT COUNT(*) as total FROM usage_logs
-                       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)""",
-                    (days,),
+                    "SELECT COUNT(*) as total FROM usage_logs WHERE created_at >= ?",
+                    (cutoff,),
                 )
                 total = cursor.fetchone()["total"]
 
@@ -962,21 +746,11 @@ def get_usage_stats(days: int = 30) -> dict:
 
 
 def update_user_workspace(user_id: int, workspace_path: str) -> bool:
-    """
-    更新用户工作空间路径（同步更新 Redis 缓存）
-
-    Args:
-        user_id: 用户 ID
-        workspace_path: 工作空间路径
-
-    Returns:
-        是否成功
-    """
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE users SET workspace_path = %s WHERE id = %s",
+                    "UPDATE users SET workspace_path = ? WHERE id = ?",
                     (workspace_path, user_id),
                 )
         from app.core.auth import get_redis_client
@@ -994,11 +768,11 @@ def update_user_workspace(user_id: int, workspace_path: str) -> bool:
 def get_all_tool_permissions() -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT tool_name, risk_level, description, global_action FROM tool_permissions ORDER BY tool_name"
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取工具权限失败：{e}")
         return []
@@ -1009,12 +783,12 @@ def upsert_tool_permission(
 ) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO tool_permissions (tool_name, risk_level, description)
-                       VALUES (%s, %s, %s)
-                       ON DUPLICATE KEY UPDATE risk_level=%s, description=%s, updated_at=NOW()""",
-                    (tool_name, risk_level, description, risk_level, description),
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(tool_name) DO UPDATE SET risk_level=excluded.risk_level, description=excluded.description, updated_at=datetime('now','localtime')""",
+                    (tool_name, risk_level, description),
                 )
         return True
     except Exception as e:
@@ -1025,9 +799,9 @@ def upsert_tool_permission(
 def update_tool_global_action(tool_name: str, action: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE tool_permissions SET global_action=%s WHERE tool_name=%s",
+                    "UPDATE tool_permissions SET global_action=? WHERE tool_name=?",
                     (action, tool_name),
                 )
         return True
@@ -1039,17 +813,17 @@ def update_tool_global_action(tool_name: str, action: str) -> bool:
 def get_user_tool_permissions(user_id: int) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT tp.tool_name, tp.risk_level, tp.description, tp.global_action,
                        COALESCE(utp.action, 'allow') as user_action,
                        CASE WHEN utp.id IS NULL THEN 0 ELSE 1 END as has_override
                        FROM tool_permissions tp
-                       LEFT JOIN user_tool_permissions utp ON tp.tool_name = utp.tool_name AND utp.user_id = %s
+                       LEFT JOIN user_tool_permissions utp ON tp.tool_name = utp.tool_name AND utp.user_id = ?
                        ORDER BY tp.tool_name""",
                     (user_id,),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户工具权限失败：{e}")
         return []
@@ -1058,12 +832,12 @@ def get_user_tool_permissions(user_id: int) -> list:
 def set_user_tool_permission(user_id: int, tool_name: str, action: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO user_tool_permissions (user_id, tool_name, action)
-                       VALUES (%s, %s, %s)
-                       ON DUPLICATE KEY UPDATE action=%s""",
-                    (user_id, tool_name, action, action),
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(user_id, tool_name) DO UPDATE SET action=excluded.action""",
+                    (user_id, tool_name, action),
                 )
         return True
     except Exception as e:
@@ -1074,9 +848,9 @@ def set_user_tool_permission(user_id: int, tool_name: str, action: str) -> bool:
 def delete_user_tool_permission(user_id: int, tool_name: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "DELETE FROM user_tool_permissions WHERE user_id=%s AND tool_name=%s",
+                    "DELETE FROM user_tool_permissions WHERE user_id=? AND tool_name=?",
                     (user_id, tool_name),
                 )
         return True
@@ -1143,12 +917,12 @@ def save_git_snapshot(
 ) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO git_snapshots
                        (user_id, session_id, turn_id, commit_hash, commit_message,
                         diff_summary, files_changed, is_auto_restore)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         user_id,
                         session_id,
@@ -1171,7 +945,7 @@ def get_git_snapshots(
 ) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 if session_id:
                     cursor.execute(
                         """SELECT s.id, s.session_id, s.turn_id, s.commit_hash,
@@ -1180,9 +954,9 @@ def get_git_snapshots(
                                   cs.title as session_title
                            FROM git_snapshots s
                            LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
-                           WHERE s.user_id = %s AND s.session_id = %s
+                           WHERE s.user_id = ? AND s.session_id = ?
                            ORDER BY s.created_at DESC
-                           LIMIT %s OFFSET %s""",
+                           LIMIT ? OFFSET ?""",
                         (user_id, session_id, limit, offset),
                     )
                 else:
@@ -1193,27 +967,28 @@ def get_git_snapshots(
                                   cs.title as session_title
                            FROM git_snapshots s
                            LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
-                           WHERE s.user_id = %s
+                           WHERE s.user_id = ?
                            ORDER BY s.created_at DESC
-                           LIMIT %s OFFSET %s""",
+                           LIMIT ? OFFSET ?""",
                         (user_id, limit, offset),
                     )
                 rows = cursor.fetchall()
                 result = []
                 for row in rows:
-                    diff_summary = json.loads(row["diff_summary"]) if row["diff_summary"] else []
+                    r = dict(row)
+                    diff_summary = json.loads(r["diff_summary"]) if r["diff_summary"] else []
                     diff_summary = [d for d in diff_summary if not d.get("path", "").startswith(("logs/", ".vite/", "__pycache__/", ".ruff_cache/"))]
                     result.append({
-                        "id": row["id"],
-                        "session_id": row["session_id"],
-                        "turn_id": row["turn_id"],
-                        "commit_hash": row["commit_hash"],
-                        "commit_message": row["commit_message"],
+                        "id": r["id"],
+                        "session_id": r["session_id"],
+                        "turn_id": r["turn_id"],
+                        "commit_hash": r["commit_hash"],
+                        "commit_message": r["commit_message"],
                         "diff_summary": diff_summary,
-                        "files_changed": row["files_changed"],
-                        "is_auto_restore": row["is_auto_restore"],
-                        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                        "session_title": row["session_title"],
+                        "files_changed": r["files_changed"],
+                        "is_auto_restore": r["is_auto_restore"],
+                        "created_at": r["created_at"],
+                        "session_title": r["session_title"],
                     })
                 return result
     except Exception as e:
@@ -1224,7 +999,7 @@ def get_git_snapshots(
 def get_git_snapshot_by_hash(commit_hash: str, user_id: int) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT s.id, s.session_id, s.turn_id, s.commit_hash,
                               s.commit_message, s.diff_summary, s.files_changed,
@@ -1232,25 +1007,26 @@ def get_git_snapshot_by_hash(commit_hash: str, user_id: int) -> Optional[dict]:
                               cs.title as session_title
                        FROM git_snapshots s
                        LEFT JOIN conversation_sessions cs ON s.session_id = cs.session_id
-                       WHERE s.commit_hash = %s AND s.user_id = %s""",
+                       WHERE s.commit_hash = ? AND s.user_id = ?""",
                     (commit_hash, user_id),
                 )
                 row = cursor.fetchone()
                 if not row:
                     return None
-                diff_summary = json.loads(row["diff_summary"]) if row["diff_summary"] else []
+                r = dict(row)
+                diff_summary = json.loads(r["diff_summary"]) if r["diff_summary"] else []
                 diff_summary = [d for d in diff_summary if not d.get("path", "").startswith(("logs/", ".vite/", "__pycache__/", ".ruff_cache/"))]
                 return {
-                    "id": row["id"],
-                    "session_id": row["session_id"],
-                    "turn_id": row["turn_id"],
-                    "commit_hash": row["commit_hash"],
-                    "commit_message": row["commit_message"],
+                    "id": r["id"],
+                    "session_id": r["session_id"],
+                    "turn_id": r["turn_id"],
+                    "commit_hash": r["commit_hash"],
+                    "commit_message": r["commit_message"],
                     "diff_summary": diff_summary,
-                    "files_changed": row["files_changed"],
-                    "is_auto_restore": row["is_auto_restore"],
-                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                    "session_title": row["session_title"],
+                    "files_changed": r["files_changed"],
+                    "is_auto_restore": r["is_auto_restore"],
+                    "created_at": r["created_at"],
+                    "session_title": r["session_title"],
                 }
     except Exception as e:
         print(f"获取快照失败：{e}")
@@ -1260,11 +1036,11 @@ def get_git_snapshot_by_hash(commit_hash: str, user_id: int) -> Optional[dict]:
 def get_all_skills() -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT skill_name, description, globally_enabled FROM skill_registry ORDER BY skill_name"
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取技能列表失败：{e}")
         return []
@@ -1273,12 +1049,12 @@ def get_all_skills() -> list:
 def upsert_skill(skill_name: str, description: str = "") -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO skill_registry (skill_name, description)
-                       VALUES (%s, %s)
-                       ON DUPLICATE KEY UPDATE description=%s, updated_at=NOW()""",
-                    (skill_name, description, description),
+                       VALUES (?, ?)
+                       ON CONFLICT(skill_name) DO UPDATE SET description=excluded.description, updated_at=datetime('now','localtime')""",
+                    (skill_name, description),
                 )
         return True
     except Exception as e:
@@ -1289,9 +1065,9 @@ def upsert_skill(skill_name: str, description: str = "") -> bool:
 def update_skill_global_enabled(skill_name: str, enabled: bool) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE skill_registry SET globally_enabled=%s WHERE skill_name=%s",
+                    "UPDATE skill_registry SET globally_enabled=? WHERE skill_name=?",
                     (1 if enabled else 0, skill_name),
                 )
         return True
@@ -1303,17 +1079,17 @@ def update_skill_global_enabled(skill_name: str, enabled: bool) -> bool:
 def get_user_skill_permissions(user_id: int) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT sr.skill_name, sr.description, sr.globally_enabled,
                        COALESCE(usp.action, 'allow') as user_action,
                        CASE WHEN usp.id IS NULL THEN 0 ELSE 1 END as has_override
                        FROM skill_registry sr
-                       LEFT JOIN user_skill_permissions usp ON sr.skill_name = usp.skill_name AND usp.user_id = %s
+                       LEFT JOIN user_skill_permissions usp ON sr.skill_name = usp.skill_name AND usp.user_id = ?
                        ORDER BY sr.skill_name""",
                     (user_id,),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户技能权限失败：{e}")
         return []
@@ -1322,12 +1098,12 @@ def get_user_skill_permissions(user_id: int) -> list:
 def set_user_skill_permission(user_id: int, skill_name: str, action: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO user_skill_permissions (user_id, skill_name, action)
-                       VALUES (%s, %s, %s)
-                       ON DUPLICATE KEY UPDATE action=%s""",
-                    (user_id, skill_name, action, action),
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(user_id, skill_name) DO UPDATE SET action=excluded.action""",
+                    (user_id, skill_name, action),
                 )
         return True
     except Exception as e:
@@ -1338,9 +1114,9 @@ def set_user_skill_permission(user_id: int, skill_name: str, action: str) -> boo
 def delete_user_skill_permission(user_id: int, skill_name: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "DELETE FROM user_skill_permissions WHERE user_id=%s AND skill_name=%s",
+                    "DELETE FROM user_skill_permissions WHERE user_id=? AND skill_name=?",
                     (user_id, skill_name),
                 )
         return True
@@ -1373,12 +1149,13 @@ def sync_skills_from_workspace(workspace_path: str) -> list:
 def get_user_by_workspace(workspace_path: str):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT id, username, is_admin, workspace_path FROM users WHERE workspace_path = %s",
+                    "SELECT id, username, is_admin, workspace_path FROM users WHERE workspace_path = ?",
                     (workspace_path,),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"根据工作空间获取用户失败：{e}")
         return None
@@ -1394,17 +1171,17 @@ def create_task(
 ):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO scheduled_tasks (user_id, name, question, cron_expression, model_id, agent) VALUES (%s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO scheduled_tasks (user_id, name, question, cron_expression, model_id, agent) VALUES (?, ?, ?, ?, ?, ?)",
                     (user_id, name, question, cron_expression, model_id, agent),
                 )
-                conn.commit()
                 task_id = cursor.lastrowid
                 cursor.execute(
-                    "SELECT * FROM scheduled_tasks WHERE id = %s", (task_id,)
+                    "SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"创建定时任务失败：{e}")
         return None
@@ -1413,12 +1190,12 @@ def create_task(
 def get_tasks_by_user(user_id: int):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM scheduled_tasks WHERE user_id = %s ORDER BY created_at DESC",
+                    "SELECT * FROM scheduled_tasks WHERE user_id = ? ORDER BY created_at DESC",
                     (user_id,),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户定时任务失败：{e}")
         return []
@@ -1427,9 +1204,9 @@ def get_tasks_by_user(user_id: int):
 def get_all_enabled_tasks():
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute("SELECT * FROM scheduled_tasks WHERE enabled = 1")
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取启用的定时任务失败：{e}")
         return []
@@ -1438,11 +1215,12 @@ def get_all_enabled_tasks():
 def get_task(task_id: int):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM scheduled_tasks WHERE id = %s", (task_id,)
+                    "SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取定时任务失败：{e}")
         return None
@@ -1451,16 +1229,15 @@ def get_task(task_id: int):
 def update_task(task_id: int, **fields):
     if not fields:
         return False
-    set_clause = ", ".join(f"{k} = %s" for k in fields)
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [task_id]
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    f"UPDATE scheduled_tasks SET {set_clause} WHERE id = %s",
+                    f"UPDATE scheduled_tasks SET {set_clause} WHERE id = ?",
                     values,
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新定时任务失败：{e}")
@@ -1470,9 +1247,8 @@ def update_task(task_id: int, **fields):
 def delete_task(task_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM scheduled_tasks WHERE id = %s", (task_id,))
-                conn.commit()
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除定时任务失败：{e}")
@@ -1484,17 +1260,13 @@ def toggle_task(task_id: int, enabled: int) -> bool:
 
 
 def update_task_last_run(task_id: int, next_run_at=None):
-    fields = {"last_run_at": "NOW()"}
-    if next_run_at:
-        fields["next_run_at"] = next_run_at
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE id = %s",
+                    "UPDATE scheduled_tasks SET last_run_at = datetime('now','localtime'), run_count = run_count + 1 WHERE id = ?",
                     (task_id,),
                 )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"更新任务执行时间失败：{e}")
@@ -1504,12 +1276,11 @@ def update_task_last_run(task_id: int, next_run_at=None):
 def create_task_run(task_id: int) -> int:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO scheduled_task_runs (task_id, status) VALUES (%s, 'running')",
+                    "INSERT INTO scheduled_task_runs (task_id, status) VALUES (?, 'running')",
                     (task_id,),
                 )
-                conn.commit()
                 return cursor.lastrowid
     except Exception as e:
         print(f"创建执行记录失败：{e}")
@@ -1525,12 +1296,11 @@ def complete_task_run(
 ):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE scheduled_task_runs SET status=%s, result_preview=%s, duration_ms=%s, error_message=%s, completed_at=NOW() WHERE id=%s",
+                    "UPDATE scheduled_task_runs SET status=?, result_preview=?, duration_ms=?, error_message=?, completed_at=datetime('now','localtime') WHERE id=?",
                     (status, result_preview, duration_ms, error_message, run_id),
                 )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"更新执行记录失败：{e}")
@@ -1540,12 +1310,11 @@ def complete_task_run(
 def update_task_run_session(run_id: int, session_id: str):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE scheduled_task_runs SET session_id=%s WHERE id=%s",
+                    "UPDATE scheduled_task_runs SET session_id=? WHERE id=?",
                     (session_id, run_id),
                 )
-                conn.commit()
     except Exception as e:
         print(f"更新执行记录会话失败：{e}")
 
@@ -1553,12 +1322,12 @@ def update_task_run_session(run_id: int, session_id: str):
 def get_task_runs(task_id: int, limit: int = 20):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM scheduled_task_runs WHERE task_id = %s ORDER BY started_at DESC LIMIT %s",
+                    "SELECT * FROM scheduled_task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT ?",
                     (task_id, limit),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取执行记录失败：{e}")
         return []
@@ -1569,15 +1338,15 @@ def create_notification(
 ):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO notifications (user_id, task_id, task_name, result_preview) VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO notifications (user_id, task_id, task_name, result_preview) VALUES (?, ?, ?, ?)",
                     (user_id, task_id, task_name, result_preview),
                 )
-                conn.commit()
                 notif_id = cursor.lastrowid
-                cursor.execute("SELECT * FROM notifications WHERE id = %s", (notif_id,))
-                return cursor.fetchone()
+                cursor.execute("SELECT * FROM notifications WHERE id = ?", (notif_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"创建通知失败：{e}")
         return None
@@ -1586,13 +1355,13 @@ def create_notification(
 def get_notifications(user_id: int, unread_only: bool = False):
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                sql = "SELECT * FROM notifications WHERE user_id = %s"
+            with _cursor(conn) as cursor:
+                sql = "SELECT * FROM notifications WHERE user_id = ?"
                 if unread_only:
                     sql += " AND is_read = 0"
                 sql += " ORDER BY created_at DESC LIMIT 50"
                 cursor.execute(sql, (user_id,))
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取通知失败：{e}")
         return []
@@ -1601,12 +1370,11 @@ def get_notifications(user_id: int, unread_only: bool = False):
 def mark_notification_read(notif_id: int, user_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE notifications SET is_read = 1 WHERE id = %s AND user_id = %s",
+                    "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
                     (notif_id, user_id),
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"标记通知已读失败：{e}")
@@ -1616,21 +1384,20 @@ def mark_notification_read(notif_id: int, user_id: int) -> bool:
 def get_failover_chain(model_id: str, provider_id: str) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT fallback_model_id, fallback_provider_id "
                     "FROM model_failover_chains "
-                    "WHERE primary_model_id = %s AND primary_provider_id = %s AND enabled = 1 "
+                    "WHERE primary_model_id = ? AND primary_provider_id = ? AND enabled = 1 "
                     "ORDER BY priority ASC",
                     (model_id, provider_id),
                 )
-                rows = cursor.fetchall()
                 return [
                     {
                         "modelID": r["fallback_model_id"],
                         "providerID": r["fallback_provider_id"],
                     }
-                    for r in rows
+                    for r in cursor.fetchall()
                 ]
     except Exception as e:
         print(f"获取 failover chain 失败：{e}")
@@ -1644,17 +1411,17 @@ def set_failover_chain(
 ) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "DELETE FROM model_failover_chains "
-                    "WHERE primary_model_id = %s AND primary_provider_id = %s",
+                    "WHERE primary_model_id = ? AND primary_provider_id = ?",
                     (primary_model_id, primary_provider_id),
                 )
                 for i, fb in enumerate(fallbacks):
                     cursor.execute(
                         "INSERT INTO model_failover_chains "
                         "(primary_model_id, primary_provider_id, fallback_model_id, fallback_provider_id, priority) "
-                        "VALUES (%s, %s, %s, %s, %s)",
+                        "VALUES (?, ?, ?, ?, ?)",
                         (
                             primary_model_id,
                             primary_provider_id,
@@ -1672,13 +1439,13 @@ def set_failover_chain(
 def get_all_failover_chains() -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT id, primary_model_id, primary_provider_id, "
                     "fallback_model_id, fallback_provider_id, priority, enabled "
                     "FROM model_failover_chains ORDER BY primary_model_id, priority"
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取所有 failover chains 失败：{e}")
         return []
@@ -1687,9 +1454,9 @@ def get_all_failover_chains() -> list[dict]:
 def delete_failover_chain(chain_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "DELETE FROM model_failover_chains WHERE id = %s", (chain_id,)
+                    "DELETE FROM model_failover_chains WHERE id = ?", (chain_id,)
                 )
                 return cursor.rowcount > 0
     except Exception as e:
@@ -1700,10 +1467,10 @@ def delete_failover_chain(chain_id: int) -> bool:
 def get_last_turn(session_id: str) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT turn_id FROM conversation_messages "
-                    "WHERE session_id = %s AND visible = 1 AND turn_id IS NOT NULL "
+                    "WHERE session_id = ? AND visible = 1 AND turn_id IS NOT NULL "
                     "ORDER BY created_at DESC LIMIT 1",
                     (session_id,),
                 )
@@ -1714,11 +1481,11 @@ def get_last_turn(session_id: str) -> Optional[dict]:
                 cursor.execute(
                     "SELECT id, role, content, opencode_message_id, turn_id, agent, model, metadata "
                     "FROM conversation_messages "
-                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 "
+                    "WHERE session_id = ? AND turn_id = ? AND visible = 1 "
                     "ORDER BY created_at ASC",
                     (session_id, turn_id),
                 )
-                return {"turn_id": turn_id, "messages": cursor.fetchall()}
+                return {"turn_id": turn_id, "messages": [dict(r) for r in cursor.fetchall()]}
     except Exception as e:
         print(f"获取最后一轮对话失败：{e}")
         return None
@@ -1727,19 +1494,18 @@ def get_last_turn(session_id: str) -> Optional[dict]:
 def soft_delete_messages_by_turn(session_id: str, turn_id: str) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT id, role, content, opencode_message_id FROM conversation_messages "
-                    "WHERE session_id = %s AND turn_id = %s AND visible = 1",
+                    "WHERE session_id = ? AND turn_id = ? AND visible = 1",
                     (session_id, turn_id),
                 )
-                deleted = cursor.fetchall()
+                deleted = [dict(r) for r in cursor.fetchall()]
                 cursor.execute(
                     "UPDATE conversation_messages SET visible = 0 "
-                    "WHERE session_id = %s AND turn_id = %s",
+                    "WHERE session_id = ? AND turn_id = ?",
                     (session_id, turn_id),
                 )
-                conn.commit()
                 return deleted
     except Exception as e:
         print(f"软删除消息失败：{e}")
@@ -1749,21 +1515,21 @@ def soft_delete_messages_by_turn(session_id: str, turn_id: str) -> list[dict]:
 def soft_delete_last_assistant_in_turn(session_id: str, turn_id: str) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT id, role, content, opencode_message_id FROM conversation_messages "
-                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 AND role = 'assistant' "
+                    "WHERE session_id = ? AND turn_id = ? AND visible = 1 AND role = 'assistant' "
                     "ORDER BY created_at DESC LIMIT 1",
                     (session_id, turn_id),
                 )
-                msg = cursor.fetchone()
-                if not msg:
+                row = cursor.fetchone()
+                if not row:
                     return None
+                msg = dict(row)
                 cursor.execute(
-                    "UPDATE conversation_messages SET visible = 0 WHERE id = %s",
+                    "UPDATE conversation_messages SET visible = 0 WHERE id = ?",
                     (msg["id"],),
                 )
-                conn.commit()
                 return msg
     except Exception as e:
         print(f"软删除 assistant 消息失败：{e}")
@@ -1773,23 +1539,22 @@ def soft_delete_last_assistant_in_turn(session_id: str, turn_id: str) -> Optiona
 def soft_delete_all_assistants_in_turn(session_id: str, turn_id: str) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT id, role, content, opencode_message_id FROM conversation_messages "
-                    "WHERE session_id = %s AND turn_id = %s AND visible = 1 AND role = 'assistant' "
+                    "WHERE session_id = ? AND turn_id = ? AND visible = 1 AND role = 'assistant' "
                     "ORDER BY created_at ASC",
                     (session_id, turn_id),
                 )
-                messages = cursor.fetchall()
+                messages = [dict(r) for r in cursor.fetchall()]
                 if not messages:
                     return []
                 ids = [m["id"] for m in messages]
-                placeholders = ",".join(["%s"] * len(ids))
+                placeholders = ",".join(["?"] * len(ids))
                 cursor.execute(
                     f"UPDATE conversation_messages SET visible = 0 WHERE id IN ({placeholders})",
                     ids,
                 )
-                conn.commit()
                 return messages
     except Exception as e:
         print(f"软删除所有 assistant 消息失败：{e}")
@@ -1799,24 +1564,16 @@ def soft_delete_all_assistants_in_turn(session_id: str, turn_id: str) -> list[di
 def update_message_opencode_id(db_id: int, opencode_message_id: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE conversation_messages SET opencode_message_id = %s WHERE id = %s",
+                    "UPDATE conversation_messages SET opencode_message_id = ? WHERE id = ?",
                     (opencode_message_id, db_id),
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新 opencode message ID 失败：{e}")
         return False
 
-
-# =============================================================================
-# Smart Entity (智能体) 相关数据库操作
-# =============================================================================
-
-import json
-from datetime import datetime, timedelta
 
 DEFAULT_DATA_EXCHANGE_CONFIG = {
     "allowed_types": [],
@@ -1854,10 +1611,9 @@ def create_smart_entity(
     knowledge_base_id: int = None,
     tool_permissions: list = None,
 ) -> dict:
-    """创建智能体"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 config_de = json.dumps(data_exchange_config or DEFAULT_DATA_EXCHANGE_CONFIG)
                 config_co = json.dumps(collaboration_config or DEFAULT_COLLABORATION_CONFIG)
                 config_di = json.dumps(discovery_config or DEFAULT_DISCOVERY_CONFIG)
@@ -1869,26 +1625,23 @@ def create_smart_entity(
                        (entity_id, owner_user_id, name, description, base_agent,
                         data_exchange_config, collaboration_config, discovery_config, capabilities,
                         system_prompt, model_config, knowledge_base_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (entity_id, owner_user_id, name, description, base_agent,
                      config_de, config_co, config_di, caps,
                      system_prompt, model_cfg, knowledge_base_id)
                 )
-                conn.commit()
 
                 cursor.execute(
-                    "INSERT INTO smart_entity_metrics (entity_id) VALUES (%s)",
+                    "INSERT INTO smart_entity_metrics (entity_id) VALUES (?)",
                     (entity_id,)
                 )
-                conn.commit()
 
                 if tool_permissions:
                     for tool_name in tool_permissions:
                         cursor.execute(
-                            "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                            "INSERT OR IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (?, ?, 'allow')",
                             (entity_id, tool_name),
                         )
-                    conn.commit()
 
                 return get_smart_entity(entity_id)
     except Exception as e:
@@ -1897,61 +1650,58 @@ def create_smart_entity(
 
 
 def get_smart_entity(entity_id: str) -> dict:
-    """获取单个智能体"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM smart_entities WHERE entity_id = %s",
+                    "SELECT * FROM smart_entities WHERE entity_id = ?",
                     (entity_id,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取智能体失败：{e}")
         return None
 
 
 def get_user_smart_entities(user_id: int) -> list:
-    """获取用户的所有智能体"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM smart_entities WHERE owner_user_id = %s ORDER BY created_at DESC",
+                    "SELECT * FROM smart_entities WHERE owner_user_id = ? ORDER BY created_at DESC",
                     (user_id,)
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户智能体失败：{e}")
         return []
 
 
 def get_discoverable_smart_entities(user_id: int) -> list:
-    """获取可发现的智能体（其他用户的公开智能体）"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """SELECT se.*, sm.total_tasks_completed, sm.total_tasks_failed, sm.avg_response_time 
+                    """SELECT se.*, sm.total_tasks_completed, sm.total_tasks_failed, sm.avg_response_time
                          FROM smart_entities se
                          LEFT JOIN smart_entity_metrics sm ON se.entity_id = sm.entity_id
-                         WHERE se.owner_user_id != %s 
+                         WHERE se.owner_user_id != ?
                          AND se.status = 'active'
-                         AND JSON_EXTRACT(se.discovery_config, '$.is_public') = TRUE
+                         AND json_extract(se.discovery_config, '$.is_public') = 1
                          ORDER BY sm.total_tasks_completed DESC, se.created_at DESC""",
                     (user_id,)
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取可发现智能体失败：{e}")
         return []
 
 
 def update_smart_entity(entity_id: str, updates: dict) -> bool:
-    """更新智能体"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 allowed_fields = [
                     'name', 'description', 'base_agent', 'status',
                     'data_exchange_config', 'collaboration_config', 'discovery_config', 'capabilities',
@@ -1963,7 +1713,7 @@ def update_smart_entity(entity_id: str, updates: dict) -> bool:
 
                 for field in allowed_fields:
                     if field in updates:
-                        set_parts.append(f"{field} = %s")
+                        set_parts.append(f"{field} = ?")
                         value = updates[field]
                         if isinstance(value, (dict, list)):
                             value = json.dumps(value)
@@ -1971,21 +1721,20 @@ def update_smart_entity(entity_id: str, updates: dict) -> bool:
 
                 if set_parts:
                     params.append(entity_id)
-                    sql = f"UPDATE smart_entities SET {', '.join(set_parts)} WHERE entity_id = %s"
+                    sql = f"UPDATE smart_entities SET {', '.join(set_parts)} WHERE entity_id = ?"
                     cursor.execute(sql, params)
 
                 if 'tool_permissions' in updates:
                     cursor.execute(
-                        "DELETE FROM entity_tool_permissions WHERE entity_id = %s",
+                        "DELETE FROM entity_tool_permissions WHERE entity_id = ?",
                         (entity_id,)
                     )
                     for tool_name in updates['tool_permissions']:
                         cursor.execute(
-                            "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                            "INSERT OR IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (?, ?, 'allow')",
                             (entity_id, tool_name),
                         )
 
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新智能体失败：{e}")
@@ -1993,14 +1742,12 @@ def update_smart_entity(entity_id: str, updates: dict) -> bool:
 
 
 def delete_smart_entity(entity_id: str) -> bool:
-    """删除智能体（检查是否有进行中任务）"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # 检查是否有进行中任务
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """SELECT COUNT(*) as count FROM smart_entity_tasks 
-                       WHERE (to_entity_id = %s OR from_entity_id = %s)
+                    """SELECT COUNT(*) as count FROM smart_entity_tasks
+                       WHERE (to_entity_id = ? OR from_entity_id = ?)
                        AND status IN ('pending', 'accepted', 'processing')""",
                     (entity_id, entity_id)
                 )
@@ -2008,19 +1755,13 @@ def delete_smart_entity(entity_id: str) -> bool:
                 if result and result['count'] > 0:
                     print(f"智能体 {entity_id} 有进行中任务，无法删除")
                     return False
-                
-                cursor.execute("DELETE FROM smart_entities WHERE entity_id = %s", (entity_id,))
-                conn.commit()
+
+                cursor.execute("DELETE FROM smart_entities WHERE entity_id = ?", (entity_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除智能体失败：{e}")
         return False
 
-
-
-# =============================================================================
-# Smart Entity Task (智能体协作任务) 相关数据库操作
-# =============================================================================
 
 def create_smart_entity_task(
     task_id: str,
@@ -2038,18 +1779,17 @@ def create_smart_entity_task(
 ) -> dict:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """INSERT INTO smart_entity_tasks 
+                    """INSERT INTO smart_entity_tasks
                        (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
                         task_type, task_title, task_description, input_data, expires_at,
                         execution_id, team_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (task_id, from_entity_id, from_user_id, to_entity_id, to_user_id,
                      task_type, task_title, task_description, json.dumps(input_data or {}), expires_at,
                      execution_id, team_id)
                 )
-                conn.commit()
                 return get_smart_entity_task(task_id)
     except Exception as e:
         print(f"创建智能体任务失败：{e}")
@@ -2057,37 +1797,36 @@ def create_smart_entity_task(
 
 
 def get_smart_entity_task(task_id: str) -> dict:
-    """获取单个任务"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM smart_entity_tasks WHERE task_id = %s",
+                    "SELECT * FROM smart_entity_tasks WHERE task_id = ?",
                     (task_id,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取智能体任务失败：{e}")
         return None
 
 
 def get_user_smart_entity_tasks(user_id: int, status_filter: list = None) -> list:
-    """获取用户的智能体任务"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                sql = "SELECT * FROM smart_entity_tasks WHERE (from_user_id = %s OR to_user_id = %s)"
+            with _cursor(conn) as cursor:
+                sql = "SELECT * FROM smart_entity_tasks WHERE (from_user_id = ? OR to_user_id = ?)"
                 params = [user_id, user_id]
-                
+
                 if status_filter:
-                    placeholders = ",".join(["%s"] * len(status_filter))
+                    placeholders = ",".join(["?"] * len(status_filter))
                     sql += f" AND status IN ({placeholders})"
                     params.extend(status_filter)
-                
+
                 sql += " ORDER BY created_at DESC"
-                
+
                 cursor.execute(sql, params)
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户智能体任务失败：{e}")
         return []
@@ -2096,12 +1835,11 @@ def get_user_smart_entity_tasks(user_id: int, status_filter: list = None) -> lis
 def update_task_session_id(task_id: str, session_id: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE smart_entity_tasks SET session_id = %s WHERE task_id = %s",
+                    "UPDATE smart_entity_tasks SET session_id = ? WHERE task_id = ?",
                     (session_id, task_id)
                 )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"更新任务session_id失败：{e}")
@@ -2109,39 +1847,41 @@ def update_task_session_id(task_id: str, session_id: str) -> bool:
 
 
 def update_smart_entity_task_status(task_id: str, status: str, output_data: dict = None, error_message: str = None) -> bool:
-    """更新任务状态"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                now = datetime.now()
-                
+            with _cursor(conn) as cursor:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
                 if status == "accepted":
                     cursor.execute(
-                        "UPDATE smart_entity_tasks SET status = %s, accepted_at = %s WHERE task_id = %s",
+                        "UPDATE smart_entity_tasks SET status = ?, accepted_at = ? WHERE task_id = ?",
                         (status, now, task_id)
                     )
                 elif status == "processing":
                     cursor.execute(
-                        "UPDATE smart_entity_tasks SET status = %s, started_at = %s WHERE task_id = %s",
+                        "UPDATE smart_entity_tasks SET status = ?, started_at = ? WHERE task_id = ?",
                         (status, now, task_id)
                     )
                 elif status in ["completed", "rejected", "timeout", "failed"]:
                     cursor.execute(
                         """UPDATE smart_entity_tasks
-                           SET status = %s, completed_at = %s, output_data = %s, error_message = %s
-                           WHERE task_id = %s""",
+                           SET status = ?, completed_at = ?, output_data = ?, error_message = ?
+                           WHERE task_id = ?""",
                         (status, now, json.dumps(output_data or {}), error_message, task_id)
                     )
                     cursor.execute(
-                        "SELECT to_entity_id, started_at FROM smart_entity_tasks WHERE task_id = %s",
+                        "SELECT to_entity_id, started_at FROM smart_entity_tasks WHERE task_id = ?",
                         (task_id,)
                     )
                     task = cursor.fetchone()
                     if task:
                         proc_time = 0
-                        if task.get("started_at"):
-                            delta = now - task["started_at"]
-                            proc_time = int(delta.total_seconds())
+                        if task["started_at"]:
+                            try:
+                                started = datetime.fromisoformat(str(task["started_at"]))
+                                proc_time = int((datetime.now() - started).total_seconds())
+                            except (ValueError, TypeError):
+                                pass
                         update_entity_metrics(
                             task["to_entity_id"],
                             completed=(status == "completed"),
@@ -2149,11 +1889,10 @@ def update_smart_entity_task_status(task_id: str, status: str, output_data: dict
                         )
                 else:
                     cursor.execute(
-                        "UPDATE smart_entity_tasks SET status = %s WHERE task_id = %s",
+                        "UPDATE smart_entity_tasks SET status = ? WHERE task_id = ?",
                         (status, task_id)
                     )
-                
-                conn.commit()
+
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新任务状态失败：{e}")
@@ -2163,12 +1902,11 @@ def update_smart_entity_task_status(task_id: str, status: str, output_data: dict
 def increment_task_attempt(task_id: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE smart_entity_tasks SET attempt_count = attempt_count + 1 WHERE task_id = %s",
+                    "UPDATE smart_entity_tasks SET attempt_count = attempt_count + 1 WHERE task_id = ?",
                     (task_id,)
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"增加任务重试次数失败：{e}")
@@ -2178,23 +1916,24 @@ def increment_task_attempt(task_id: str) -> bool:
 def get_entity_metrics(entity_id: str) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM smart_entity_metrics WHERE entity_id = %s",
+                    "SELECT * FROM smart_entity_metrics WHERE entity_id = ?",
                     (entity_id,)
                 )
                 row = cursor.fetchone()
                 if row:
+                    r = dict(row)
                     return {
-                        "entity_id": row["entity_id"],
-                        "total_tasks_received": row["total_tasks_received"],
-                        "total_tasks_completed": row["total_tasks_completed"],
-                        "total_tasks_failed": row["total_tasks_failed"],
-                        "total_processing_time": row["total_processing_time"],
-                        "avg_response_time": row["avg_response_time"],
-                        "last_task_at": str(row["last_task_at"]) if row["last_task_at"] else None,
-                        "daily_quota": row["daily_quota"],
-                        "daily_used": row["daily_used"],
+                        "entity_id": r["entity_id"],
+                        "total_tasks_received": r["total_tasks_received"],
+                        "total_tasks_completed": r["total_tasks_completed"],
+                        "total_tasks_failed": r["total_tasks_failed"],
+                        "total_processing_time": r["total_processing_time"],
+                        "avg_response_time": r["avg_response_time"],
+                        "last_task_at": r["last_task_at"],
+                        "daily_quota": r["daily_quota"],
+                        "daily_used": r["daily_used"],
                     }
         return None
     except Exception as e:
@@ -2209,29 +1948,28 @@ def update_entity_metrics(
 ) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "UPDATE smart_entity_metrics SET total_tasks_received = total_tasks_received + 1, "
-                    "last_task_at = NOW() WHERE entity_id = %s",
+                    "last_task_at = datetime('now','localtime') WHERE entity_id = ?",
                     (entity_id,)
                 )
                 if completed:
                     cursor.execute(
                         "UPDATE smart_entity_metrics SET total_tasks_completed = total_tasks_completed + 1, "
-                        "total_processing_time = total_processing_time + %s WHERE entity_id = %s",
+                        "total_processing_time = total_processing_time + ? WHERE entity_id = ?",
                         (processing_time, entity_id)
                     )
                     cursor.execute(
                         "UPDATE smart_entity_metrics SET avg_response_time = "
-                        "total_processing_time / GREATEST(total_tasks_completed, 1) WHERE entity_id = %s",
+                        "total_processing_time / max(total_tasks_completed, 1) WHERE entity_id = ?",
                         (entity_id,)
                     )
                 else:
                     cursor.execute(
-                        "UPDATE smart_entity_metrics SET total_tasks_failed = total_tasks_failed + 1 WHERE entity_id = %s",
+                        "UPDATE smart_entity_metrics SET total_tasks_failed = total_tasks_failed + 1 WHERE entity_id = ?",
                         (entity_id,)
                     )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"更新智能体指标失败：{e}")
@@ -2241,9 +1979,9 @@ def update_entity_metrics(
 def get_entity_tool_permissions(entity_id: str) -> list[str]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT tool_name FROM entity_tool_permissions WHERE entity_id = %s AND action = 'allow'",
+                    "SELECT tool_name FROM entity_tool_permissions WHERE entity_id = ? AND action = 'allow'",
                     (entity_id,)
                 )
                 return [row["tool_name"] for row in cursor.fetchall()]
@@ -2255,17 +1993,16 @@ def get_entity_tool_permissions(entity_id: str) -> list[str]:
 def set_entity_tool_permissions(entity_id: str, tool_names: list[str]) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "DELETE FROM entity_tool_permissions WHERE entity_id = %s",
+                    "DELETE FROM entity_tool_permissions WHERE entity_id = ?",
                     (entity_id,)
                 )
                 for tool_name in tool_names:
                     cursor.execute(
-                        "INSERT IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (%s, %s, 'allow')",
+                        "INSERT OR IGNORE INTO entity_tool_permissions (entity_id, tool_name, action) VALUES (?, ?, 'allow')",
                         (entity_id, tool_name),
                     )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"设置智能体工具权限失败：{e}")
@@ -2284,12 +2021,12 @@ def create_team(
 ) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO smart_entity_teams
                        (name, description, owner_user_id, orchestrator_entity_id,
                         member_entity_ids, team_prompt, routing_config, is_permanent)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         name,
                         description,
@@ -2301,7 +2038,6 @@ def create_team(
                         1 if is_permanent else 0,
                     ),
                 )
-                conn.commit()
                 return get_team(cursor.lastrowid)
     except Exception as e:
         print(f"创建团队失败：{e}")
@@ -2311,8 +2047,8 @@ def create_team(
 def get_team(team_id: int) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM smart_entity_teams WHERE id = %s", (team_id,))
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM smart_entity_teams WHERE id = ?", (team_id,))
                 row = cursor.fetchone()
                 if row:
                     result = dict(row)
@@ -2330,9 +2066,9 @@ def get_team(team_id: int) -> dict | None:
 def get_user_teams(user_id: int) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM smart_entity_teams WHERE owner_user_id = %s ORDER BY created_at DESC",
+                    "SELECT * FROM smart_entity_teams WHERE owner_user_id = ? ORDER BY created_at DESC",
                     (user_id,),
                 )
                 results = []
@@ -2340,6 +2076,8 @@ def get_user_teams(user_id: int) -> list[dict]:
                     d = dict(row)
                     if isinstance(d.get("member_entity_ids"), str):
                         d["member_entity_ids"] = json.loads(d["member_entity_ids"])
+                    if isinstance(d.get("routing_config"), str):
+                        d["routing_config"] = json.loads(d["routing_config"])
                     results.append(d)
                 return results
     except Exception as e:
@@ -2350,22 +2088,23 @@ def get_user_teams(user_id: int) -> list[dict]:
 def update_team(team_id: int, updates: dict) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 allowed = ["name", "description", "orchestrator_entity_id", "member_entity_ids", "status", "team_prompt", "routing_config", "is_permanent"]
                 parts = []
                 params = []
                 for f in allowed:
                     if f in updates:
-                        parts.append(f"{f} = %s")
+                        parts.append(f"{f} = ?")
                         val = updates[f]
                         if isinstance(val, list):
+                            val = json.dumps(val)
+                        elif isinstance(val, dict):
                             val = json.dumps(val)
                         params.append(val)
                 if not parts:
                     return False
                 params.append(team_id)
-                cursor.execute(f"UPDATE smart_entity_teams SET {', '.join(parts)} WHERE id = %s", params)
-                conn.commit()
+                cursor.execute(f"UPDATE smart_entity_teams SET {', '.join(parts)} WHERE id = ?", params)
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新团队失败：{e}")
@@ -2375,9 +2114,8 @@ def update_team(team_id: int, updates: dict) -> bool:
 def delete_team(team_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM smart_entity_teams WHERE id = %s", (team_id,))
-                conn.commit()
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM smart_entity_teams WHERE id = ?", (team_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除团队失败：{e}")
@@ -2387,14 +2125,15 @@ def delete_team(team_id: int) -> bool:
 def create_knowledge_base(name: str, description: str, scope: str, owner_id: Optional[int] = None) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "INSERT INTO knowledge_bases (name, description, scope, owner_id) VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO knowledge_bases (name, description, scope, owner_id) VALUES (?, ?, ?, ?)",
                     (name, description, scope, owner_id),
                 )
                 kb_id = cursor.lastrowid
-                cursor.execute("SELECT * FROM knowledge_bases WHERE id = %s", (kb_id,))
-                return cursor.fetchone()
+                cursor.execute("SELECT * FROM knowledge_bases WHERE id = ?", (kb_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"创建知识库失败：{e}")
         return None
@@ -2403,9 +2142,10 @@ def create_knowledge_base(name: str, description: str, scope: str, owner_id: Opt
 def get_knowledge_base(kb_id: int) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM knowledge_bases WHERE id = %s", (kb_id,))
-                return cursor.fetchone()
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM knowledge_bases WHERE id = ?", (kb_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取知识库失败：{e}")
         return None
@@ -2414,12 +2154,13 @@ def get_knowledge_base(kb_id: int) -> Optional[dict]:
 def get_user_knowledge_base(user_id: int) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM knowledge_bases WHERE scope = 'user' AND owner_id = %s AND is_active = 1",
+                    "SELECT * FROM knowledge_bases WHERE scope = 'user' AND owner_id = ? AND is_active = 1",
                     (user_id,),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取用户知识库失败：{e}")
         return None
@@ -2428,11 +2169,11 @@ def get_user_knowledge_base(user_id: int) -> Optional[dict]:
 def get_enterprise_knowledge_bases() -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT * FROM knowledge_bases WHERE scope = 'enterprise' AND is_active = 1 ORDER BY created_at DESC"
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取企业知识库列表失败：{e}")
         return []
@@ -2456,19 +2197,18 @@ def update_knowledge_base(kb_id: int, **fields) -> bool:
     vals = []
     for k, v in fields.items():
         if k in allowed:
-            sets.append(f"{k} = %s")
+            sets.append(f"{k} = ?")
             vals.append(v)
     if not sets:
         return False
     vals.append(kb_id)
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    f"UPDATE knowledge_bases SET {', '.join(sets)} WHERE id = %s",
+                    f"UPDATE knowledge_bases SET {', '.join(sets)} WHERE id = ?",
                     vals,
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新知识库失败：{e}")
@@ -2478,9 +2218,8 @@ def update_knowledge_base(kb_id: int, **fields) -> bool:
 def delete_knowledge_base(kb_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM knowledge_bases WHERE id = %s", (kb_id,))
-                conn.commit()
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除知识库失败：{e}")
@@ -2499,11 +2238,11 @@ def create_knowledge_source(
 ) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    """INSERT INTO knowledge_sources 
+                    """INSERT INTO knowledge_sources
                        (kb_id, title, source_type, scope, file_path, original_filename, content, char_count, tags)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         kb_id,
                         title,
@@ -2518,12 +2257,12 @@ def create_knowledge_source(
                 )
                 source_id = cursor.lastrowid
                 cursor.execute(
-                    "UPDATE knowledge_bases SET total_sources = total_sources + 1, total_chars = total_chars + %s, updated_at = NOW() WHERE id = %s",
+                    "UPDATE knowledge_bases SET total_sources = total_sources + 1, total_chars = total_chars + ?, updated_at = datetime('now','localtime') WHERE id = ?",
                     (len(content) if content else 0, kb_id),
                 )
-                conn.commit()
-                cursor.execute("SELECT * FROM knowledge_sources WHERE id = %s", (source_id,))
-                return cursor.fetchone()
+                cursor.execute("SELECT * FROM knowledge_sources WHERE id = ?", (source_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"创建知识源失败：{e}")
         return None
@@ -2532,24 +2271,25 @@ def create_knowledge_source(
 def get_knowledge_source(source_id: int) -> Optional[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM knowledge_sources WHERE id = %s", (source_id,))
-                return cursor.fetchone()
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM knowledge_sources WHERE id = ?", (source_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取知识源失败：{e}")
         return None
 
 
 def get_knowledge_sources(kb_id: int, active_only: bool = True) -> list:
-    sql = "SELECT * FROM knowledge_sources WHERE kb_id = %s"
+    sql = "SELECT * FROM knowledge_sources WHERE kb_id = ?"
     if active_only:
         sql += " AND is_active = 1"
     sql += " ORDER BY created_at DESC"
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(sql, (kb_id,))
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取知识源列表失败：{e}")
         return []
@@ -2558,11 +2298,11 @@ def get_knowledge_sources(kb_id: int, active_only: bool = True) -> list:
 def get_enterprise_sources() -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     "SELECT * FROM knowledge_sources WHERE scope = 'enterprise' AND is_active = 1 ORDER BY created_at DESC"
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取企业知识源失败：{e}")
         return []
@@ -2575,25 +2315,24 @@ def update_knowledge_source(source_id: int, **fields) -> bool:
     for k, v in fields.items():
         if k in allowed:
             if k == "tags":
-                sets.append("tags = %s")
+                sets.append("tags = ?")
                 vals.append(json.dumps(v) if v else None)
             elif k == "content":
-                sets.append("content = %s, char_count = %s")
+                sets.append("content = ?, char_count = ?")
                 vals.extend([v, len(v) if v else 0])
             else:
-                sets.append(f"{k} = %s")
+                sets.append(f"{k} = ?")
                 vals.append(v)
     if not sets:
         return False
     vals.append(source_id)
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    f"UPDATE knowledge_sources SET {', '.join(sets)} WHERE id = %s",
+                    f"UPDATE knowledge_sources SET {', '.join(sets)} WHERE id = ?",
                     vals,
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"更新知识源失败：{e}")
@@ -2606,13 +2345,12 @@ def delete_knowledge_source(source_id: int) -> bool:
         return False
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM knowledge_sources WHERE id = %s", (source_id,))
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM knowledge_sources WHERE id = ?", (source_id,))
                 cursor.execute(
-                    "UPDATE knowledge_bases SET total_sources = GREATEST(total_sources - 1, 0), total_chars = GREATEST(total_chars - %s, 0), updated_at = NOW() WHERE id = %s",
+                    "UPDATE knowledge_bases SET total_sources = max(total_sources - 1, 0), total_chars = max(total_chars - ?, 0), updated_at = datetime('now','localtime') WHERE id = ?",
                     (source.get("char_count", 0), source["kb_id"]),
                 )
-                conn.commit()
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除知识源失败：{e}")
@@ -2623,10 +2361,10 @@ def search_knowledge_sources(query: str, scope: Optional[str] = None, kb_id: Opt
     conditions = ["is_active = 1"]
     params = []
     if scope:
-        conditions.append("scope = %s")
+        conditions.append("scope = ?")
         params.append(scope)
     if kb_id:
-        conditions.append("kb_id = %s")
+        conditions.append("kb_id = ?")
         params.append(kb_id)
 
     import re
@@ -2639,28 +2377,27 @@ def search_knowledge_sources(query: str, scope: Optional[str] = None, kb_id: Opt
     for word in words:
         w = word.lower()
         all_keywords.add(w)
-        no_space = w.replace(' ', '').replace('　', '')
+        no_space = w.replace(' ', '').replace('\u3000', '')
         if no_space != w:
             all_keywords.add(no_space)
         if len(no_space) > 6 and ' ' not in w:
-            # 中文长词滑动窗口提取2-4字子串作为关键词
             for i in range(len(no_space) - 1):
                 for j in range(i + 2, min(i + 5, len(no_space) + 1)):
                     all_keywords.add(no_space[i:j])
 
     search_conditions = []
     for kw in sorted(all_keywords, key=len, reverse=True)[:8]:
-        search_conditions.append("(LOWER(title) LIKE %s OR LOWER(content) LIKE %s OR LOWER(REPLACE(REPLACE(title, ' ', ''), '　', '')) LIKE %s OR LOWER(REPLACE(REPLACE(content, ' ', ''), '　', '')) LIKE %s)")
+        search_conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(REPLACE(REPLACE(title, ' ', ''), '\u3000', '')) LIKE ? OR LOWER(REPLACE(REPLACE(content, ' ', ''), '\u3000', '')) LIKE ?)")
         params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%", f"%{kw}%"])
     conditions.append(f"({' OR '.join(search_conditions)})")
 
     params.append(limit)
-    sql = f"SELECT * FROM knowledge_sources WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT %s"
+    sql = f"SELECT * FROM knowledge_sources WHERE {' AND '.join(conditions)} ORDER BY created_at DESC LIMIT ?"
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(sql, params)
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"搜索知识源失败：{e}")
         return []
@@ -2678,12 +2415,12 @@ def create_learned_pattern(
 ) -> int | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO learned_patterns
                     (user_id, session_id, turn_id, trigger_description, learned_action,
                      confidence, skill_name, conversation_snapshot)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         user_id, session_id, turn_id, trigger_description,
                         learned_action, confidence, skill_name,
@@ -2699,18 +2436,18 @@ def create_learned_pattern(
 def get_user_learned_patterns(user_id: int, status: str | None = None, limit: int = 50) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 if status:
                     cursor.execute(
-                        "SELECT * FROM learned_patterns WHERE user_id = %s AND status = %s ORDER BY created_at DESC LIMIT %s",
+                        "SELECT * FROM learned_patterns WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
                         (user_id, status, limit),
                     )
                 else:
                     cursor.execute(
-                        "SELECT * FROM learned_patterns WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                        "SELECT * FROM learned_patterns WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                         (user_id, limit),
                     )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取学习模式失败: {e}")
         return []
@@ -2719,9 +2456,9 @@ def get_user_learned_patterns(user_id: int, status: str | None = None, limit: in
 def update_learned_pattern_status(pattern_id: int, status: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE learned_patterns SET status = %s, reviewed_at = NOW() WHERE id = %s",
+                    "UPDATE learned_patterns SET status = ?, reviewed_at = datetime('now','localtime') WHERE id = ?",
                     (status, pattern_id),
                 )
                 return cursor.rowcount > 0
@@ -2733,9 +2470,10 @@ def update_learned_pattern_status(pattern_id: int, status: str) -> bool:
 def get_learned_pattern_by_id(pattern_id: int) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM learned_patterns WHERE id = %s", (pattern_id,))
-                return cursor.fetchone()
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM learned_patterns WHERE id = ?", (pattern_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取学习模式失败: {e}")
         return None
@@ -2744,13 +2482,13 @@ def get_learned_pattern_by_id(pattern_id: int) -> dict | None:
 def upsert_skill_usage(user_id: int, skill_name: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO skill_usage_telemetry (user_id, skill_name, use_count, last_used_at)
-                    VALUES (%s, %s, 1, NOW())
-                    ON DUPLICATE KEY UPDATE
+                    VALUES (?, ?, 1, datetime('now','localtime'))
+                    ON CONFLICT(user_id, skill_name) DO UPDATE SET
                         use_count = use_count + 1,
-                        last_used_at = NOW()""",
+                        last_used_at = datetime('now','localtime')""",
                     (user_id, skill_name),
                 )
                 return True
@@ -2762,12 +2500,12 @@ def upsert_skill_usage(user_id: int, skill_name: str) -> bool:
 def get_user_skill_telemetry(user_id: int) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM skill_usage_telemetry WHERE user_id = %s ORDER BY last_used_at DESC",
+                    "SELECT * FROM skill_usage_telemetry WHERE user_id = ? ORDER BY last_used_at DESC",
                     (user_id,),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取技能遥测失败: {e}")
         return []
@@ -2776,9 +2514,9 @@ def get_user_skill_telemetry(user_id: int) -> list[dict]:
 def update_skill_usage_state(user_id: int, skill_name: str, state: str) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE skill_usage_telemetry SET state = %s WHERE user_id = %s AND skill_name = %s",
+                    "UPDATE skill_usage_telemetry SET state = ? WHERE user_id = ? AND skill_name = ?",
                     (state, user_id, skill_name),
                 )
                 return cursor.rowcount > 0
@@ -2790,9 +2528,9 @@ def update_skill_usage_state(user_id: int, skill_name: str, state: str) -> bool:
 def get_all_users() -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute("SELECT id, username, workspace_path FROM users WHERE disabled = 0")
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户列表失败: {e}")
         return []
@@ -2811,10 +2549,10 @@ def get_provider_auth(provider_id: str) -> dict | None:
 def create_channel(channel_type: str, name: str, config_json: dict, owner_id: int) -> int | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO channels (channel_type, name, config, owner_id)
-                    VALUES (%s, %s, %s, %s)""",
+                    VALUES (?, ?, ?, ?)""",
                     (channel_type, name, json.dumps(config_json, ensure_ascii=False), owner_id),
                 )
                 return cursor.lastrowid
@@ -2826,18 +2564,18 @@ def create_channel(channel_type: str, name: str, config_json: dict, owner_id: in
 def get_channels(owner_id: int | None = None, channel_type: str | None = None) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 conditions = []
                 params = []
                 if owner_id:
-                    conditions.append("owner_id = %s")
+                    conditions.append("owner_id = ?")
                     params.append(owner_id)
                 if channel_type:
-                    conditions.append("channel_type = %s")
+                    conditions.append("channel_type = ?")
                     params.append(channel_type)
                 where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
                 cursor.execute(f"SELECT * FROM channels{where} ORDER BY created_at DESC", params)
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取渠道列表失败: {e}")
         return []
@@ -2846,9 +2584,10 @@ def get_channels(owner_id: int | None = None, channel_type: str | None = None) -
 def get_channel_by_id(channel_id: int) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM channels WHERE id = %s", (channel_id,))
-                return cursor.fetchone()
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取渠道失败: {e}")
         return None
@@ -2857,7 +2596,7 @@ def get_channel_by_id(channel_id: int) -> dict | None:
 def update_channel(channel_id: int, **fields) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 allowed = {"name", "config", "status"}
                 set_parts = []
                 values = []
@@ -2866,10 +2605,10 @@ def update_channel(channel_id: int, **fields) -> bool:
                     if k not in allowed:
                         continue
                     if k == "config" and isinstance(v, dict):
-                        cursor.execute("SELECT config FROM channels WHERE id = %s", (channel_id,))
+                        cursor.execute("SELECT config FROM channels WHERE id = ?", (channel_id,))
                         row = cursor.fetchone()
                         existing = {}
-                        if row and row.get("config"):
+                        if row and row["config"]:
                             ec = row["config"]
                             try:
                                 existing = json.loads(ec) if isinstance(ec, str) else ec
@@ -2877,15 +2616,14 @@ def update_channel(channel_id: int, **fields) -> bool:
                                 existing = {}
                         existing.update(v)
                         v = json.dumps(existing, ensure_ascii=False)
-                    set_parts.append(f"{k} = %s")
+                    set_parts.append(f"{k} = ?")
                     values.append(v)
-        if not set_parts:
-            return False
-        values.append(channel_id)
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+
+                if not set_parts:
+                    return False
+                values.append(channel_id)
                 cursor.execute(
-                    f"UPDATE channels SET {', '.join(set_parts)} WHERE id = %s", values
+                    f"UPDATE channels SET {', '.join(set_parts)} WHERE id = ?", values
                 )
                 return cursor.rowcount > 0
     except Exception as e:
@@ -2896,8 +2634,8 @@ def update_channel(channel_id: int, **fields) -> bool:
 def delete_channel(channel_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM channels WHERE id = %s", (channel_id,))
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除渠道失败: {e}")
@@ -2909,37 +2647,40 @@ def get_or_create_channel_binding(
 ) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM channel_bindings WHERE channel_id = %s AND external_user_id = %s",
+                    "SELECT * FROM channel_bindings WHERE channel_id = ? AND external_user_id = ?",
                     (channel_id, external_user_id),
                 )
                 existing = cursor.fetchone()
                 if existing:
+                    existing = dict(existing)
                     if external_chat_id and existing.get("external_chat_id") != external_chat_id:
                         cursor.execute(
-                            "UPDATE channel_bindings SET external_chat_id = %s, last_active_at = NOW() WHERE id = %s",
+                            "UPDATE channel_bindings SET external_chat_id = ?, last_active_at = datetime('now','localtime') WHERE id = ?",
                             (external_chat_id, existing["id"]),
                         )
                     else:
                         cursor.execute(
-                            "UPDATE channel_bindings SET last_active_at = NOW() WHERE id = %s",
+                            "UPDATE channel_bindings SET last_active_at = datetime('now','localtime') WHERE id = ?",
                             (existing["id"],),
                         )
                     cursor.execute(
-                        "SELECT * FROM channel_bindings WHERE id = %s", (existing["id"],)
+                        "SELECT * FROM channel_bindings WHERE id = ?", (existing["id"],)
                     )
-                    return cursor.fetchone()
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
 
                 cursor.execute(
                     """INSERT INTO channel_bindings (channel_id, user_id, external_user_id, external_chat_id)
-                    VALUES (%s, %s, %s, %s)""",
+                    VALUES (?, ?, ?, ?)""",
                     (channel_id, user_id, external_user_id, external_chat_id),
                 )
                 cursor.execute(
-                    "SELECT * FROM channel_bindings WHERE id = %s", (cursor.lastrowid,)
+                    "SELECT * FROM channel_bindings WHERE id = ?", (cursor.lastrowid,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取/创建渠道绑定失败: {e}")
         return None
@@ -2948,9 +2689,9 @@ def get_or_create_channel_binding(
 def update_channel_binding_session(binding_id: int, session_id: str | None) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE channel_bindings SET session_id = %s WHERE id = %s",
+                    "UPDATE channel_bindings SET session_id = ? WHERE id = ?",
                     (session_id, binding_id),
                 )
                 return True
@@ -2962,9 +2703,9 @@ def update_channel_binding_session(binding_id: int, session_id: str | None) -> b
 def update_channel_binding_user(binding_id: int, user_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "UPDATE channel_bindings SET user_id = %s, session_id = NULL WHERE id = %s",
+                    "UPDATE channel_bindings SET user_id = ?, session_id = NULL WHERE id = ?",
                     (user_id, binding_id),
                 )
                 return cursor.rowcount > 0
@@ -2976,12 +2717,13 @@ def update_channel_binding_user(binding_id: int, user_id: int) -> bool:
 def get_channel_binding_by_external(channel_id: int, external_user_id: str) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM channel_bindings WHERE channel_id = %s AND external_user_id = %s",
+                    "SELECT * FROM channel_bindings WHERE channel_id = ? AND external_user_id = ?",
                     (channel_id, external_user_id),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"查询渠道绑定失败: {e}")
         return None
@@ -2990,12 +2732,13 @@ def get_channel_binding_by_external(channel_id: int, external_user_id: str) -> d
 def get_user_channel_binding(user_id: int, channel_id: int) -> dict | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM channel_bindings WHERE user_id = %s AND channel_id = %s",
+                    "SELECT * FROM channel_bindings WHERE user_id = ? AND channel_id = ?",
                     (user_id, channel_id),
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取用户渠道绑定失败: {e}")
         return None
@@ -3004,16 +2747,16 @@ def get_user_channel_binding(user_id: int, channel_id: int) -> dict | None:
 def get_user_channel_bindings_with_channel(user_id: int) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT cb.*, c.channel_type, c.name as channel_name, c.config as channel_config
                        FROM channel_bindings cb
                        JOIN channels c ON cb.channel_id = c.id
-                       WHERE cb.user_id = %s AND c.status = 'active'
+                       WHERE cb.user_id = ? AND c.status = 'active'
                        ORDER BY cb.last_active_at DESC""",
                     (user_id,),
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户渠道绑定(含渠道)失败: {e}")
         return []
@@ -3022,15 +2765,15 @@ def get_user_channel_bindings_with_channel(user_id: int) -> list[dict]:
 def get_channel_bindings(user_id: int | None = None) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 if user_id:
                     cursor.execute(
-                        "SELECT * FROM channel_bindings WHERE user_id = %s ORDER BY last_active_at DESC",
+                        "SELECT * FROM channel_bindings WHERE user_id = ? ORDER BY last_active_at DESC",
                         (user_id,),
                     )
                 else:
                     cursor.execute("SELECT * FROM channel_bindings ORDER BY last_active_at DESC")
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取渠道绑定失败: {e}")
         return []
@@ -3039,8 +2782,8 @@ def get_channel_bindings(user_id: int | None = None) -> list[dict]:
 def delete_channel_binding(binding_id: int) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM channel_bindings WHERE id = %s", (binding_id,))
+            with _cursor(conn) as cursor:
+                cursor.execute("DELETE FROM channel_bindings WHERE id = ?", (binding_id,))
                 return cursor.rowcount > 0
     except Exception as e:
         print(f"删除渠道绑定失败: {e}")
@@ -3053,11 +2796,11 @@ def log_channel_message(
 ) -> int | None:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO channel_messages
                     (channel_id, binding_id, direction, content, content_type, external_msg_id, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (channel_id, binding_id, direction, content, content_type, external_msg_id, status),
                 )
                 return cursor.lastrowid
@@ -3067,9 +2810,11 @@ def log_channel_message(
 
 
 def get_system_performance(hours: int = 24) -> dict:
+    cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_1h = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT model_id, provider_id,
                               COUNT(*) as count,
@@ -3077,10 +2822,10 @@ def get_system_performance(hours: int = 24) -> dict:
                               MIN(duration_ms) as min_ms,
                               MAX(duration_ms) as max_ms
                        FROM usage_logs
-                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+                       WHERE created_at >= ?
                        GROUP BY model_id, provider_id
                        ORDER BY count DESC""",
-                    (hours,),
+                    (cutoff,),
                 )
                 by_model = [
                     {
@@ -3098,25 +2843,22 @@ def get_system_performance(hours: int = 24) -> dict:
                     """SELECT COUNT(*) as count,
                               AVG(duration_ms) as avg_ms
                        FROM usage_logs
-                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+                       WHERE created_at >= ?
                        AND duration_ms > 120000""",
-                    (hours,),
+                    (cutoff,),
                 )
                 err = cursor.fetchone()
                 error_count = err["count"] if err else 0
 
                 cursor.execute(
-                    """SELECT COUNT(*) as total
-                       FROM usage_logs
-                       WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)""",
-                    (hours,),
+                    "SELECT COUNT(*) as total FROM usage_logs WHERE created_at >= ?",
+                    (cutoff,),
                 )
                 total = cursor.fetchone()["total"]
 
                 cursor.execute(
-                    """SELECT COUNT(*) as active
-                       FROM conversation_sessions
-                       WHERE updated_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"""
+                    "SELECT COUNT(*) as active FROM conversation_sessions WHERE updated_at >= ?",
+                    (cutoff_1h,),
                 )
                 active_sessions = cursor.fetchone()["active"]
 
@@ -3140,7 +2882,7 @@ def get_system_performance(hours: int = 24) -> dict:
 def get_recent_errors(limit: int = 20) -> list[dict]:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT ul.id, ul.user_id, u.username, ul.session_id,
                               ul.model_id, ul.provider_id, ul.agent,
@@ -3149,7 +2891,7 @@ def get_recent_errors(limit: int = 20) -> list[dict]:
                        LEFT JOIN users u ON ul.user_id = u.id
                        WHERE ul.duration_ms > 120000
                        ORDER BY ul.created_at DESC
-                       LIMIT %s""",
+                       LIMIT ?""",
                     (limit,),
                 )
                 return [
@@ -3173,14 +2915,15 @@ def get_recent_errors(limit: int = 20) -> list[dict]:
 
 
 def get_channel_analytics(days: int = 30, channel_id: int | None = None) -> dict:
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                base_where = "WHERE cm.created_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)"
-                params: list = [days]
+            with _cursor(conn) as cursor:
+                base_where = "WHERE cm.created_at >= ?"
+                params: list = [cutoff]
 
                 if channel_id:
-                    base_where += " AND cm.channel_id = %s"
+                    base_where += " AND cm.channel_id = ?"
                     params.append(channel_id)
 
                 cursor.execute(
@@ -3213,12 +2956,12 @@ def get_channel_analytics(days: int = 30, channel_id: int | None = None) -> dict
                 ]
 
                 cursor.execute(
-                    f"""SELECT DATE(cm.created_at) as date,
+                    f"""SELECT date(cm.created_at) as date,
                                SUM(CASE WHEN cm.direction = 'inbound' THEN 1 ELSE 0 END) as inbound,
                                SUM(CASE WHEN cm.direction = 'outbound' THEN 1 ELSE 0 END) as outbound
                         FROM channel_messages cm
                         {base_where}
-                        GROUP BY DATE(cm.created_at)
+                        GROUP BY date(cm.created_at)
                         ORDER BY date""",
                     params[:],
                 )
@@ -3270,14 +3013,13 @@ def create_team_execution(exec_id: str, team_id: int, user_id: int,
                           task_description: str, orchestrator_session_id: str = None) -> dict:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """INSERT INTO team_executions
                        (id, team_id, user_id, task_description, orchestrator_session_id)
-                       VALUES (%s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?)""",
                     (exec_id, team_id, user_id, task_description, orchestrator_session_id)
                 )
-                conn.commit()
                 return get_team_execution(exec_id)
     except Exception as e:
         print(f"创建团队执行记录失败: {e}")
@@ -3287,9 +3029,10 @@ def create_team_execution(exec_id: str, team_id: int, user_id: int,
 def get_team_execution(exec_id: str) -> dict:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM team_executions WHERE id = %s", (exec_id,))
-                return cursor.fetchone()
+            with _cursor(conn) as cursor:
+                cursor.execute("SELECT * FROM team_executions WHERE id = ?", (exec_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"获取团队执行记录失败: {e}")
         return None
@@ -3298,12 +3041,12 @@ def get_team_execution(exec_id: str) -> dict:
 def list_team_executions(team_id: int, limit: int = 20) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
-                    "SELECT * FROM team_executions WHERE team_id = %s ORDER BY created_at DESC LIMIT %s",
+                    "SELECT * FROM team_executions WHERE team_id = ? ORDER BY created_at DESC LIMIT ?",
                     (team_id, limit)
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取团队执行列表失败: {e}")
         return []
@@ -3314,27 +3057,26 @@ def update_team_execution_status(exec_id: str, status: str,
                                   orchestrator_session_id: str = None) -> bool:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                now = datetime.now()
+            with _cursor(conn) as cursor:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if status in ("completed", "failed"):
                     cursor.execute(
                         """UPDATE team_executions
-                           SET status = %s, result = %s, error_message = %s, completed_at = %s,
-                               orchestrator_session_id = COALESCE(%s, orchestrator_session_id)
-                           WHERE id = %s""",
+                           SET status = ?, result = ?, error_message = ?, completed_at = ?,
+                               orchestrator_session_id = COALESCE(?, orchestrator_session_id)
+                           WHERE id = ?""",
                         (status, result, error_message, now, orchestrator_session_id, exec_id)
                     )
                 elif orchestrator_session_id:
                     cursor.execute(
-                        "UPDATE team_executions SET status = %s, orchestrator_session_id = %s WHERE id = %s",
+                        "UPDATE team_executions SET status = ?, orchestrator_session_id = ? WHERE id = ?",
                         (status, orchestrator_session_id, exec_id)
                     )
                 else:
                     cursor.execute(
-                        "UPDATE team_executions SET status = %s WHERE id = %s",
+                        "UPDATE team_executions SET status = ? WHERE id = ?",
                         (status, exec_id)
                     )
-                conn.commit()
                 return True
     except Exception as e:
         print(f"更新团队执行状态失败: {e}")
@@ -3344,16 +3086,16 @@ def update_team_execution_status(exec_id: str, status: str,
 def get_execution_member_tasks(exec_id: str) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT t.*, e.name as entity_name, e.description as entity_description
                        FROM smart_entity_tasks t
                        LEFT JOIN smart_entities e ON t.to_entity_id = e.entity_id
-                       WHERE t.execution_id = %s
+                       WHERE t.execution_id = ?
                        ORDER BY t.created_at ASC""",
                     (exec_id,)
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取执行成员任务失败: {e}")
         return []
@@ -3362,16 +3104,16 @@ def get_execution_member_tasks(exec_id: str) -> list:
 def list_user_team_executions(user_id: int, limit: int = 50) -> list:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT ex.*, tm.name as team_name
                        FROM team_executions ex
                        LEFT JOIN smart_entity_teams tm ON ex.team_id = tm.id
-                       WHERE ex.user_id = %s
-                       ORDER BY ex.created_at DESC LIMIT %s""",
+                       WHERE ex.user_id = ?
+                       ORDER BY ex.created_at DESC LIMIT ?""",
                     (user_id, limit)
                 )
-                return cursor.fetchall()
+                return [dict(r) for r in cursor.fetchall()]
     except Exception as e:
         print(f"获取用户团队执行列表失败: {e}")
         return []
@@ -3380,17 +3122,18 @@ def list_user_team_executions(user_id: int, limit: int = 50) -> list:
 def get_active_execution_by_entity(entity_id: str) -> dict:
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
+            with _cursor(conn) as cursor:
                 cursor.execute(
                     """SELECT te.id as execution_id, te.team_id, tm.orchestrator_entity_id
                        FROM team_executions te
                        JOIN smart_entity_teams tm ON te.team_id = tm.id
                        WHERE te.status = 'running'
-                         AND tm.orchestrator_entity_id = %s
+                         AND tm.orchestrator_entity_id = ?
                        ORDER BY te.created_at DESC LIMIT 1""",
                     (entity_id,)
                 )
-                return cursor.fetchone()
+                row = cursor.fetchone()
+                return dict(row) if row else None
     except Exception as e:
         print(f"查找活跃执行失败: {e}")
         return None

@@ -9,11 +9,10 @@ load_dotenv(env_path)
 
 
 class Config:
-    DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-    DB_USER = os.getenv("DB_USER", "root")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-    DB_NAME = os.getenv("DB_NAME", "ANALYSE")
-    DB_CHARSET = os.getenv("DB_CHARSET", "utf8mb4")
+    SQLITE_DB_PATH = os.getenv(
+        "SQLITE_DB_PATH",
+        str(Path(__file__).parent.parent / "data" / "openhub.db"),
+    )
 
     OPENCODE_BASE_URL = os.getenv("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
     OPENCODE_USERNAME = os.getenv("OPENCODE_USERNAME", "opencode")

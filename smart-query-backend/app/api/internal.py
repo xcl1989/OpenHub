@@ -335,13 +335,13 @@ class SmartEntityBatchCreateInternal(BaseModel):
 def _count_active_tasks(entity_id: str) -> int:
     try:
         with database.get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM smart_entity_tasks WHERE to_entity_id = %s AND status IN ('accepted', 'processing')",
-                    (entity_id,)
-                )
-                row = cursor.fetchone()
-                return row["cnt"] if row else 0
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM smart_entity_tasks WHERE to_entity_id = ? AND status IN ('accepted', 'processing')",
+                (entity_id,)
+            )
+            row = cursor.fetchone()
+            return row["cnt"] if row else 0
     except Exception:
         return 0
 
