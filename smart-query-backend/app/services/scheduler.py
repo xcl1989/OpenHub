@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -6,6 +7,19 @@ from apscheduler.triggers.cron import CronTrigger
 from app import database
 
 _scheduler: AsyncIOScheduler | None = None
+
+
+def _normalize_crontab(expr: str) -> str:
+    parts = expr.split()
+    if len(parts) != 5:
+        return expr
+    dow = parts[4]
+
+    def _convert(m: re.Match) -> str:
+        return str((int(m.group()) + 6) % 7)
+
+    parts[4] = re.sub(r'(?<!/)(\d+)', _convert, dow)
+    return ' '.join(parts)
 
 
 class TaskScheduler:
@@ -30,7 +44,7 @@ class TaskScheduler:
 
     def _add_job(self, task: dict):
         try:
-            trigger = CronTrigger.from_crontab(task["cron_expression"])
+            trigger = CronTrigger.from_crontab(_normalize_crontab(task["cron_expression"]))
             self._scheduler.add_job(
                 _execute_task_wrapper,
                 trigger,
