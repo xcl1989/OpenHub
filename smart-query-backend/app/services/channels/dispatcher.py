@@ -384,10 +384,12 @@ async def _process_channel_query(
                             if streaming_enabled:
                                 streaming_full_text += delta
                                 streaming_sequence += 1
-                                await adapter.update_card_text(
+                                ok = await adapter.update_card_text(
                                     streaming_card_id, CARD_ELEMENT_ID,
                                     streaming_full_text, streaming_sequence,
                                 )
+                                if not ok and matched_events <= 5:
+                                    print(f"[ChannelDispatcher] update_card_text 失败 seq={streaming_sequence}", flush=True)
                         if delta and matched_events <= 30:
                             print(f"[ChannelDispatcher] delta: partID={part_id} type={pt!r} len={len(delta)} text_len={len(current_message_text)}", flush=True)
 

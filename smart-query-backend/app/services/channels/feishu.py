@@ -323,6 +323,7 @@ class FeishuAdapter(ChannelAdapter):
             },
             "config": {
                 "streaming_mode": True,
+                "update_multi": True,
                 "summary": {"content": "正在生成回复..."},
                 "streaming_config": {
                     "print_frequency_ms": {"default": 10},
@@ -349,7 +350,7 @@ class FeishuAdapter(ChannelAdapter):
             f"{FEISHU_BASE_URL}/cardkit/v1/cards",
             headers={
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
             },
             json=body,
         )
@@ -357,21 +358,19 @@ class FeishuAdapter(ChannelAdapter):
             data = resp.json()
             if data.get("code") == 0:
                 card_data = data.get("data", {})
+                print(f"[Feishu] 流式卡片创建成功: card_id={card_data.get('card_id')}", flush=True)
                 return {
                     "card_id": card_data.get("card_id", ""),
                     "version": card_data.get("version", ""),
                 }
+            print(f"[Feishu] 创建流式卡片失败: code={data.get('code')} msg={data.get('msg')}", flush=True)
             logger.warning(
                 "创建流式卡片失败: code=%s msg=%s",
                 data.get("code"),
                 data.get("msg"),
             )
         else:
-            logger.warning(
-                "创建流式卡片 HTTP 错误: %d body=%s",
-                resp.status_code,
-                resp.text[:300],
-            )
+            print(f"[Feishu] 创建流式卡片 HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
         return None
 
     async def send_card(self, chat_id: str, card_id: str) -> str | None:
@@ -427,7 +426,7 @@ class FeishuAdapter(ChannelAdapter):
             f"{FEISHU_BASE_URL}/cardkit/v1/cards/{card_id}/elements/{element_id}/content",
             headers={
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
             },
             json=body,
         )
@@ -435,16 +434,19 @@ class FeishuAdapter(ChannelAdapter):
             data = resp.json()
             if data.get("code") == 0:
                 return True
+            print(
+                f"[Feishu] 更新卡片文本失败: code={data.get('code')} msg={data.get('msg')} seq={sequence}",
+                flush=True,
+            )
             logger.warning(
                 "更新卡片文本失败: code=%s msg=%s",
                 data.get("code"),
                 data.get("msg"),
             )
         else:
-            logger.warning(
-                "更新卡片文本 HTTP 错误: %d body=%s",
-                resp.status_code,
-                resp.text[:300],
+            print(
+                f"[Feishu] 更新卡片文本 HTTP {resp.status_code}: {resp.text[:300]}",
+                flush=True,
             )
         return False
 
@@ -463,7 +465,7 @@ class FeishuAdapter(ChannelAdapter):
             f"{FEISHU_BASE_URL}/cardkit/v1/cards/{card_id}/settings",
             headers={
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
             },
             json=body,
         )
@@ -471,17 +473,14 @@ class FeishuAdapter(ChannelAdapter):
             data = resp.json()
             if data.get("code") == 0:
                 return True
+            print(f"[Feishu] 关闭流式模式失败: code={data.get('code')} msg={data.get('msg')}", flush=True)
             logger.warning(
                 "关闭流式模式失败: code=%s msg=%s",
                 data.get("code"),
                 data.get("msg"),
             )
         else:
-            logger.warning(
-                "关闭流式模式 HTTP 错误: %d body=%s",
-                resp.status_code,
-                resp.text[:300],
-            )
+            print(f"[Feishu] 关闭流式模式 HTTP {resp.status_code}: {resp.text[:300]}", flush=True)
         return False
 
 
