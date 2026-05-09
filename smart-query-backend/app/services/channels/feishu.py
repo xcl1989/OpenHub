@@ -346,7 +346,7 @@ class FeishuAdapter(ChannelAdapter):
         }
         client = await self._get_http_client()
         resp = await client.post(
-            f"{FEISHU_BASE_URL}/cardkit/v1/card",
+            f"{FEISHU_BASE_URL}/cardkit/v1/cards",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -424,7 +424,7 @@ class FeishuAdapter(ChannelAdapter):
         }
         client = await self._get_http_client()
         resp = await client.put(
-            f"{FEISHU_BASE_URL}/cardkit/v1/card/{card_id}/element/{element_id}/content",
+            f"{FEISHU_BASE_URL}/cardkit/v1/cards/{card_id}/elements/{element_id}/content",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -460,7 +460,7 @@ class FeishuAdapter(ChannelAdapter):
         }
         client = await self._get_http_client()
         resp = await client.patch(
-            f"{FEISHU_BASE_URL}/cardkit/v1/card/{card_id}/settings",
+            f"{FEISHU_BASE_URL}/cardkit/v1/cards/{card_id}/settings",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
