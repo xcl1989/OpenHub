@@ -1273,6 +1273,31 @@ def update_task_last_run(task_id: int, next_run_at=None):
         return False
 
 
+def get_running_task_run(task_id: int) -> dict | None:
+    try:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT id, task_id, started_at FROM scheduled_task_runs WHERE task_id=? AND status='running' AND started_at > datetime('now','localtime','-10 minutes') ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def cleanup_stale_runs():
+    try:
+        with get_db_connection() as conn:
+            with _cursor(conn) as cursor:
+                cursor.execute(
+                    "UPDATE scheduled_task_runs SET status='failed', error_message='服务重启清理僵尸记录', completed_at=datetime('now','localtime') WHERE status='running'",
+                )
+                return cursor.rowcount
+    except Exception as e:
+        print(f"清理僵尸记录失败：{e}")
+        return 0
+
+
 def create_task_run(task_id: int) -> int:
     try:
         with get_db_connection() as conn:

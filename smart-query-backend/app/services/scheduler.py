@@ -25,11 +25,14 @@ def _normalize_crontab(expr: str) -> str:
 class TaskScheduler:
     def __init__(self):
         self._scheduler = AsyncIOScheduler(
-            job_defaults={"max_instances": 3, "coalesce": True}
+            job_defaults={"max_instances": 1, "coalesce": True}
         )
         self._initialized = False
 
     async def start(self):
+        stale = await asyncio.to_thread(database.cleanup_stale_runs)
+        if stale:
+            print(f"[Scheduler] 清理 {stale} 条僵尸执行记录")
         tasks = await asyncio.to_thread(database.get_all_enabled_tasks)
         for task in tasks:
             self._add_job(task)
@@ -51,6 +54,7 @@ class TaskScheduler:
                 args=[task["id"]],
                 id=f"task_{task['id']}",
                 replace_existing=True,
+                misfire_grace_time=60,
             )
         except Exception as e:
             print(f"[Scheduler] 注册任务失败 id={task['id']}: {e}")

@@ -22,6 +22,11 @@ async def execute_task(task_id: int):
         print(f"[TaskExecutor] 任务不存在: {task_id}")
         return
 
+    existing_run = await asyncio.to_thread(database.get_running_task_run, task_id)
+    if existing_run:
+        print(f"[TaskExecutor] 任务 {task_id} 已有运行中的实例 (run_id={existing_run['id']})，跳过")
+        return
+
     user = await asyncio.to_thread(database.get_user_by_id, task["user_id"])
     if not user or not user.get("workspace_path"):
         print(f"[TaskExecutor] 用户或工作空间不存在: {task['user_id']}")
