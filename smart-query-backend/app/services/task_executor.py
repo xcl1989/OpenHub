@@ -15,8 +15,21 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = config.OPENCODE_BASE_URL
 
+_task_locks: dict[int, asyncio.Lock] = {}
+
 
 async def execute_task(task_id: int):
+    if task_id not in _task_locks:
+        _task_locks[task_id] = asyncio.Lock()
+    lock = _task_locks[task_id]
+    if lock.locked():
+        print(f"[TaskExecutor] 任务 {task_id} 正在执行中，跳过")
+        return
+    async with lock:
+        await _execute_task_inner(task_id)
+
+
+async def _execute_task_inner(task_id: int):
     task = await asyncio.to_thread(database.get_task, task_id)
     if not task:
         print(f"[TaskExecutor] 任务不存在: {task_id}")
@@ -343,6 +356,28 @@ async def _notify_channel(task: dict, full_text: str, preview: str):
     if not adapter:
         return
 
-    msg = f"⏰ 定时任务「{task['name']}」执行完成\n\n{full_text[:3000]}"
-    await adapter.smart_send(binding["external_chat_id"], msg)
+    chat_id = binding["external_chat_id"]
+    msg = f"⏰ 定时任务「{task['name']}」执行完成\n\n{_safe_truncate(full_text)}"
+    try:
+        result = await adapter.smart_send(chat_id, msg)
+        if not result:
+            print(f"[TaskExecutor] smart_send 失败，尝试纯文本重试")
+            result = await adapter.send_message(chat_id, msg[:4000], "text")
+    except Exception as e:
+        print(f"[TaskExecutor] smart_send 异常: {e}，尝试纯文本重试")
+        try:
+            await adapter.send_message(chat_id, msg[:4000], "text")
+        except Exception as e2:
+            print(f"[TaskExecutor] 纯文本重试也失败: {e2}")
+            return
     print(f"[TaskExecutor] 已推送结果到渠道 {notify_channel_id}")
+
+
+def _safe_truncate(text: str, max_len: int = 3000) -> str:
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    last_break = max(truncated.rfind("\n\n"), truncated.rfind("\n"))
+    if last_break > max_len * 0.5:
+        truncated = truncated[:last_break]
+    return truncated.rstrip() + "\n\n...(内容已截断)"

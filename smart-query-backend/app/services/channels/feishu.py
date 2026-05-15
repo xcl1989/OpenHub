@@ -264,11 +264,9 @@ class FeishuAdapter(ChannelAdapter):
             data = resp.json()
             if data.get("code") == 0:
                 return True
-            logger.warning(
-                "飞书富文本发送失败: %s %s", data.get("code"), data.get("msg")
-            )
+            logger.warning("飞书富文本发送失败: %s %s body=%s", data.get("code"), data.get("msg"), resp.text[:500])
         else:
-            logger.warning("飞书富文本 HTTP 错误: %d", resp.status_code)
+            logger.warning("飞书富文本 HTTP 错误: %d body=%s", resp.status_code, resp.text[:500])
 
         return await self.send_message(receive_id, text, "text")
 
@@ -296,11 +294,9 @@ class FeishuAdapter(ChannelAdapter):
             data = resp.json()
             if data.get("code") == 0:
                 return True
-            logger.warning(
-                "飞书卡片发送失败: %s %s", data.get("code"), data.get("msg")
-            )
+            logger.warning("飞书卡片发送失败: %s %s body=%s", data.get("code"), data.get("msg"), resp.text[:500])
         else:
-            logger.warning("飞书卡片 HTTP 错误: %d", resp.status_code)
+            logger.warning("飞书卡片 HTTP 错误: %d body=%s", resp.status_code, resp.text[:500])
 
         return await self.send_message(receive_id, text, "text")
 
@@ -547,6 +543,8 @@ def _parse_chart_spec(text: str) -> dict | None:
 
 def _format_as_card(text: str) -> dict:
     card_elements = []
+    card_table_count = 0
+    MAX_CARD_TABLES = 5
 
     parts = re.split(r"(```[\s\S]*?```)", text)
 
@@ -593,9 +591,15 @@ def _format_as_card(text: str) -> dict:
             segments = _split_tables_and_text(part)
             for seg_type, seg_content in segments:
                 if seg_type == "table":
-                    table_elem = _markdown_table_to_card_table(seg_content)
-                    if table_elem:
-                        card_elements.append(table_elem)
+                    card_table_count += 1
+                    if card_table_count <= MAX_CARD_TABLES:
+                        table_elem = _markdown_table_to_card_table(seg_content)
+                        if table_elem:
+                            card_elements.append(table_elem)
+                        else:
+                            card_elements.append(
+                                {"tag": "markdown", "content": seg_content}
+                            )
                     else:
                         card_elements.append(
                             {"tag": "markdown", "content": seg_content}
